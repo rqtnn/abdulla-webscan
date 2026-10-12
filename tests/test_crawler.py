@@ -189,6 +189,24 @@ class CrawlerTests(unittest.TestCase):
         self.assertEqual(issues, [])
         self.assertEqual(findings[0]['evidence'][0]['job_status'], 'cancelled')
 
+    def test_named_submit_is_preserved_and_csrf_forms_are_deferred(self):
+        body = b'''<form><input name="id"><input name="Submit" type="submit" value="Submit"></form>
+        <form><input name="id"><input name="csrf_token" value="fixture"></form>'''
+        with patch.object(crawler, 'fetch', return_value=dict(status=200,
+                headers=[['Content-Type', 'text/html']], body=body, truncated=False)):
+            result = self.run_crawl()
+        self.assertIn(self.base + '?id=&Submit=Submit', result['discovered'])
+        self.assertNotIn('candidate_url', result['forms'][1])
+        self.assertIn('manual review', result['forms'][1]['reason'])
+
+    def test_phpinfo_content_is_detected_and_body_evidence_retained(self):
+        body = b'<html>phpinfo() PHP Version 8.0 Configuration</html>'
+        with patch.object(crawler, 'fetch', return_value=dict(status=200,
+                headers=[['Content-Type', 'text/html']], body=body, truncated=False)):
+            result = self.run_crawl()
+        self.assertTrue(result['pages'][0]['phpinfo_signature'])
+        self.assertEqual((self.root / 'crawl' / result['pages'][0]['body_file']).read_bytes(), body)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -188,6 +188,7 @@ class WebScanTests(unittest.TestCase):
         bin_dir.mkdir()
         templates = self.root / "templates"
         templates.mkdir()
+        (templates / 'fixture.yaml').write_text('id: fixture')
         fake = '''#!PYTHON
 import sys,json,os
 from pathlib import Path
