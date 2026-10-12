@@ -1,8 +1,41 @@
 # Abdulla WebScan
 
+## IP أو hostname أو URL — 1.2
+
+تقبل الأداة هدفاً واحداً: IPv4، IPv6، اسم نطاق، أو رابط HTTP/HTTPS كامل.
+مثال الموقع التدريبي الذي اخترته، بدون تحويل الرابط إلى IP يدوياً:
+
+```bash
+python3 webscan.py 'https://pentest-ground.com:4280' --rate 3
+python3 webscan.py 'http://192.168.56.101:8080/app/'
+python3 webscan.py 192.168.56.101
+python3 webscan.py lab.example
+python3 webscan.py 'http://[::1]:8080/'
+```
+
+الرابط يحتفظ بالمسار والـquery، والـfragment يُحذف لأنه لا يُرسل للسيرفر.
+إذا أعطيت URL بدون `--ports` أو `--all-ports`، Nmap يفحص منفذ الرابط فقط
+(443 لـHTTPS أو 80 لـHTTP إن لم تذكر منفذاً)، ويبدأ الويب من الرابط نفسه.
+إذا ذكرت قائمة بورتات، لازم تحتوي منفذ الرابط. للروابط استخدم `http://` أو
+`https://`؛ اسم النطاق بدون scheme مقبول كهدف لاكتشاف الخدمات.
+
+عند إدخال hostname، يحل DNS ويختار IP واحداً لـNmap (IPv4 أولاً، وإلا IPv6
+مع `-6`). أدوات HTTP والـcrawler تحتفظ باسم النطاق كي تعمل Host headers وSNI
+والتحقق من شهادة HTTPS بشكل صحيح. لا تحتاج `--insecure` إلا إذا كانت شهادة
+اللاب غير موثوقة. فحص المسارات يستخدم مجلد صفحة الرابط، ولا يضيف FUZZ إلى query.
+
+نطاق الويب هو نفس اسم الهدف بالضبط، أو نفس عنوان IP إذا أدخلت IP؛ لا يتوسع إلى
+subdomains أو أسماء أخرى حتى لو كانت تشير لنفس IP. DNS لأدوات الويب طبيعي،
+وقد يختار عنواناً مختلفاً لنفس النطاق في المواقع ذات CDN أو عدة backends؛
+اختيار IP واحد لـNmap ليس network sandbox أو تثبيتاً لكل اتصالات الأدوات الخارجية.
+دعم IPv6 في الأداة لا يضمن دعم كل scanner خارجي أو كل قوالبه له.
+ما زالت credentials داخل URL، قوائم الأهداف، CIDR/ranges وFTP مرفوضة.
+`--dry-run` لا يحل DNS ولا يرسل طلبات. التقرير يسجل `input_target` و`input_url`
+و`scan_ip` لتمييز هدف الويب عن عنوان Nmap.
+
 ## الفحص التلقائي الموسّع — 1.1
 
-الحين تدخل IP واحد، والأداة تمشي من اكتشاف الخدمات إلى فحوص الويب، ثم crawling
+الحين تدخل هدفاً واحداً، والأداة تمشي من اكتشاف الخدمات إلى فحوص الويب، ثم crawling
 للصفحات والمسارات المكتشفة، وجمع GET parameters وتشغيل SQLmap detection تلقائياً.
 تشغّل Nuclei مرة ثانية على قائمة الروابط المكتشفة. التقرير يجمع حالة التغطية،
 النتائج حسب درجة الخطورة المبلّغ عنها، الأدلة، والخطوات المقترحة للتحقق والمعالجة.
@@ -30,7 +63,7 @@ URL/parameter كحد أقصى، بمهلة 120 ثانية لكل فحص SQLmap. 
 1000 طلب، عمق 10، و50 فحص SQLmap. كل فحص باراميتر له وقت مستقل، لذلك وقت التشغيل
 الإجمالي قد يطول. فحوص SQLmap التلقائية بالتتابع حتى لو اخترت parallel.
 
-Crawler يتبع روابط HTML داخل نفس IP والبورت/scheme الذي استجاب في discovery فقط.
+Crawler يتبع روابط HTML داخل نفس host والبورت/scheme الذي استجاب في discovery فقط.
 لا يتبع redirects ولا يشغّل JavaScript. يحتفظ بجسم الاستجابة حتى 256 KiB،
 headers، status، URL وSHA-256؛ ويكتب حدود العمق والوقت والطلبات والأخطاء.
 يجمع بحد أقصى عشرة أضعاف عدد الطلبات من الروابط، ويزور ثلاث قيم مختلفة كحد أقصى
@@ -117,7 +150,7 @@ python3 webscan.py 192.168.56.101 --dry-run --ports 80,443
 python3 webscan.py 192.168.56.101 --ports 80,443 --enum ffuf --rate 3
 ```
 
-Replace the example IP with your single authorized lab IP. Ensure it is reachable
+Replace the example target with your single authorized lab IP, hostname, or URL. Ensure it is reachable
 from WSL/Kali; localhost inside WSL refers to that Linux environment. A Kali VM
 can use the same commands from the directory where you copied the project.
 If a package is unavailable, use its official installation instructions or
@@ -128,7 +161,7 @@ Offline report adapter tests can also run with native Windows Python; five CLI,
 process-group, and executable-fixture tests explicitly skip there and must run
 in Linux to verify the full workflow.
 
-أداة شخصية تجمع فحوص الويب من **IP واحد** وتكتب النتائج في تقرير HTML وJSON.
+أداة شخصية تجمع فحوص الويب من **هدف واحد: IP أو hostname أو URL** وتكتب النتائج في تقرير HTML وJSON.
 تعمل على **Kali / Linux / WSL مع Python 3.10 أو أحدث**، بدون مكتبات Python إضافية.
 استخدم عنوان اللاب المصرّح لك تختبره.
 
@@ -256,7 +289,7 @@ python3 webscan.py 192.168.56.101 \
 هذا يشغّل detection على الـGET parameter المحدد بـlevel 1 / risk 1، باستخدام
 Boolean، Error، وUNION techniques. لا يستخرج قواعد البيانات أو الجداول، ولا يشغّل
 OS shell. لا يشمل POST/JSON requests أو authenticated flows في هذه النسخة.
-الـURL لازم يستعمل نفس IP. SQLmap التلقائي يفحص الباراميترات المختارة ضمن الحدود، ولا يفحص كل مسار أو قيمة.
+الـURL لازم يستعمل نفس host الهدف. SQLmap التلقائي يفحص الباراميترات المختارة ضمن الحدود، ولا يفحص كل مسار أو قيمة.
 
 ## التقرير
 
@@ -275,8 +308,8 @@ Exit codes: `0` تشغيل بلا فجوات ظاهرة أو dry-run، `2` نق�
 
 ## حدود النسخة
 
-- IP واحد IPv4. لا يدعم hostname / IPv6 / IP ranges أو multi-target scans.
-- مواقع virtual hosting أو SNI التي تحتاج domain قد لا تظهر بشكل صحيح عبر IP.
+- هدف واحد: IPv4 / IPv6 / hostname / HTTP(S) URL. لا يدعم IP ranges أو multi-target scans.
+- مواقع virtual hosting أو SNI تعمل عند إدخال domain/URL؛ إدخال IP وحده لا يحدد اسم الموقع.
 - لا يختبر login، IDOR، business logic أو كل XSS تلقائياً؛ استعمل Burp للخطوات اليدوية.
 - Nuclei يستخدم `~/nuclei-templates`؛ غيّر المكان بـ`--templates` إذا لزم.
 - قوالب Nuclei والأدوات وإصداراتها تحدد مدى التغطية. هذه ليست كل قوالب CVE ولا كل

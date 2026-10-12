@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-IP web assessment runner. Python 3.10+, Linux/Kali/WSL.
+"""Single-host web assessment runner. Python 3.10+, Linux/Kali/WSL.
 
 External scanners stay external: this script schedules them and records evidence.
 """
@@ -29,8 +29,9 @@ import uuid
 import xml.etree.ElementTree as ET
 from findings import collect
 from crawler import crawl, select_candidates, origin
+from scope import parse_target, prepare_target, normalize_url, authority
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
@@ -75,23 +76,30 @@ def listed_ports(value):
 
 
 def scoped_url(value, target):
-    if any(ord(c) < 32 for c in value):
-        raise ValueError("Control characters are not allowed in URLs.")
     u = urllib.parse.urlsplit(value)
-    if u.scheme not in ("http", "https") or u.username or u.password or u.fragment:
-        raise ValueError("Use an HTTP(S) URL without credentials or a fragment.")
-    if ipv4(u.hostname or "") != target:
-        raise ValueError("The URL must use the exact target IP, not a hostname or another IP.")
-    if u.port is not None and not 1 <= u.port <= 65535:
-        raise ValueError("Invalid URL port.")
-    return value
+    if u.fragment:
+        raise ValueError('Use a URL without a fragment')
+    return normalize_url(value, target)
+
+
+def target_input(value):
+    try:
+        target = parse_target(value)
+        return target.url or target.host
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def parse_nmap(path, target):
     """Only accept ports attached to our IP; closed and filtered ports are excluded."""
     found = []
     for host in ET.parse(path).getroot().findall("host"):
-        if not any(a.get("addr") == target for a in host.findall("address")):
+        def matches(address):
+            try:
+                return ipaddress.ip_address(address.get('addr', '')) == ipaddress.ip_address(target)
+            except ValueError:
+                return False
+        if not any(matches(a) for a in host.findall("address")):
             continue
         for p in host.findall("ports/port"):
             state = p.find("state")
@@ -115,7 +123,7 @@ def candidates(target, services):
             continue
         tls = entry.get("tunnel") == "ssl" or "https" in entry["service"].lower() or port in (443, 8443)
         schemes = ("https", "http") if tls else ("http", "https")
-        urls.extend(f"{scheme}://{target}:{port}/" for scheme in schemes)
+        urls.extend(f"{scheme}://{authority(target, port)}/" for scheme in schemes)
     return list(dict.fromkeys(urls))
 
 
@@ -262,6 +270,9 @@ def build_jobs(args, root, urls, binaries):
         enum_names = []
     for index, url in enumerate(urls, 1):
         prefix = root / f"web-{index:02d}"
+        parsed = urllib.parse.urlsplit(url)
+        enum_path = parsed.path if parsed.path.endswith('/') else parsed.path.rsplit('/', 1)[0] + '/'
+        enum_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, enum_path, '', ''))
 
         def add(tool, parameters, outputs=(), reason=""):
             folder = prefix / tool
@@ -282,24 +293,24 @@ def build_jobs(args, root, urls, binaries):
             if tool in args.skip:
                 continue
             if tool == "ffuf":
-                add(tool, lambda f: ["-u", url + "FUZZ", "-w", wordlist, "-t", "2", "-rate", rate,
+                add(tool, lambda f: ["-u", enum_url + "FUZZ", "-w", wordlist, "-t", "2", "-rate", rate,
                                      "-timeout", "5", "-maxtime", str(timeout), "-ac", "-s",
                                      "-of", "json", "-o", str(f / "results.json")]
                     + (["-k"] if args.insecure else []), ["results.json"])
             elif tool == "gobuster":
                 # A single worker and delay approximate the requested per-tool cap.
-                add(tool, lambda f: ["dir", "-u", url, "-w", wordlist, "-t", "1", "--delay",
+                add(tool, lambda f: ["dir", "-u", enum_url, "-w", wordlist, "-t", "1", "--delay",
                                      f"{max(1, int(1000 / args.rate))}ms", "--timeout", "5s",
                                      "--no-progress", "-o", str(f / "results.txt")]
                     + (["-k"] if args.insecure else []), ["results.txt"])
             elif tool == "feroxbuster":
-                add(tool, lambda f: ["-u", url, "-w", wordlist, "-t", "2", "--rate-limit", rate,
+                add(tool, lambda f: ["-u", enum_url, "-w", wordlist, "-t", "2", "--rate-limit", rate,
                                      "--no-recursion", "--dont-extract-links", "--no-state",
                                      "--time-limit", f"{timeout}s", "--timeout", "5", "--json",
                                      "--silent", "-o", str(f / "results.jsonl")]
                     + (["-k"] if args.insecure else []), ["results.jsonl"])
             elif tool == "dirsearch":
-                add(tool, lambda f: ["-u", url, "-w", wordlist, "-t", "2", "--max-rate", rate,
+                add(tool, lambda f: ["-u", enum_url, "-w", wordlist, "-t", "2", "--max-rate", rate,
                                      "--timeout", "5", "--retries", "0", "--format", "json",
                                      "--no-color", "-q", "-o", str(f / "results.json")], ["results.json"])
         if "nikto" not in args.skip:
@@ -347,7 +358,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
     seeds = live + [f['url'] for f in observed if f['category'] == 'endpoint'
                     and f['check'].isdigit() and 200 <= int(f['check']) < 300 and origin(f['url']) in allowed]
     folder = root / 'crawl'
-    say('[CRAWL] Discovering same-IP pages and GET parameters')
+    say('[CRAWL] Discovering same-host pages and GET parameters')
     started = time.monotonic()
     try:
         crawl(seeds, args.target, folder, runner.stop, args.crawl_pages, args.crawl_depth,
@@ -481,7 +492,8 @@ Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an e
 not a validated penetration testing report. Each active web job uses its own rate cap;
 parallel mode adds those rates. HTTP errors and redirects are recorded as responses.
 Redirect destinations are displayed for review.</div>
-<h2>Assessment coverage</h2><p>Unauthenticated web assessment of one IP. Severity counts describe unvalidated scanner/configuration matches;
+<h2>Assessment coverage</h2><p>Unauthenticated web assessment of one host. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
+HTTP uses the target hostname for Host headers, TLS SNI and certificate verification. Severity counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
 <h2>Discovered GET parameter checks</h2><p>Candidates are not proof of injection. Checks use SQLmap detection only.
@@ -505,14 +517,14 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 
 
 def parser():
-    p = argparse.ArgumentParser(description="Abdulla WebScan: one-IP web assessment pipeline for authorized labs.")
-    p.add_argument("target", nargs="?", type=ipv4, help="One target IPv4 address; prompted if omitted.")
+    p = argparse.ArgumentParser(description="Abdulla WebScan: one-host web assessment pipeline for authorized labs.")
+    p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
     p.add_argument("--workers", type=positive, default=2, help="Concurrent web tools, default 2.")
     p.add_argument("--enum", choices=("auto", *ENUM_TOOLS, "all", "none"), default="auto")
     p.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
     p.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
-    p.add_argument("--url", action="append", default=[], help="Explicit same-IP HTTP(S) base URL, useful for unusual ports.")
+    p.add_argument("--url", action="append", default=[], help="Additional same-host HTTP(S) base URL, useful for unusual ports.")
     p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlist.txt")
     p.add_argument("--templates", type=Path, default=Path.home() / "nuclei-templates")
     p.add_argument("--rate", type=positive, default=5, help="Approximate web requests/sec per tool, not global.")
@@ -522,7 +534,7 @@ def parser():
     p.add_argument("--skip", nargs="*", choices=ALL_TOOLS, default=[])
     p.add_argument("--dry-run", action="store_true", help="Write and print a plan without subprocesses or network requests.")
     p.add_argument("--check", action="store_true", help="List installed tool paths and exit; no target needed.")
-    p.add_argument("--sqlmap-url", help="Optional specific same-IP GET URL for a separate SQLi detection job.")
+    p.add_argument("--sqlmap-url", help="Optional specific same-host GET URL for a separate SQLi detection job.")
     p.add_argument("--sqlmap-param", help="Existing GET parameter name to test, e.g. id.")
     p.add_argument('--no-crawl', action='store_true', help='Disable automatic HTML discovery and checks derived from it.')
     p.add_argument('--crawl-pages', type=positive, default=100, help='Maximum crawler GET requests, default 100.')
@@ -547,7 +559,7 @@ def main(argv=None):
         return 0
     if not args.target:
         try:
-            args.target = ipv4(input("Lab target IP: "))
+            args.target = target_input(input("Lab target IP, hostname or URL: "))
         except (argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
     if args.ports and args.all_ports:
@@ -559,15 +571,20 @@ def main(argv=None):
     if bool(args.sqlmap_url) != bool(args.sqlmap_param):
         p.error("Use --sqlmap-url and --sqlmap-param together.")
     try:
-        for url in args.url:
-            scoped_url(url, args.target)
+        prepare_target(args)
+        if args.input_url:
+            u = urllib.parse.urlsplit(args.input_url)
+            if args.ports and (u.port or (443 if u.scheme == 'https' else 80)) not in listed_ports(args.ports):
+                raise ValueError('The target URL port is outside --ports.')
+        for index, url in enumerate(args.url):
+            args.url[index] = scoped_url(url, args.target)
             u = urllib.parse.urlsplit(url)
             if u.query:
                 raise ValueError("--url is a base URL without query parameters; use --sqlmap-url for SQLmap.")
             if args.ports and (u.port or (443 if u.scheme == "https" else 80)) not in listed_ports(args.ports):
                 raise ValueError("An explicit URL port is outside --ports.")
         if args.sqlmap_url:
-            scoped_url(args.sqlmap_url, args.target)
+            args.sqlmap_url = scoped_url(args.sqlmap_url, args.target)
             sql_url = urllib.parse.urlsplit(args.sqlmap_url)
             if args.ports and (sql_url.port or (443 if sql_url.scheme == "https" else 80)) not in listed_ports(args.ports):
                 raise ValueError("The SQLmap URL port is outside --ports.")
@@ -576,16 +593,18 @@ def main(argv=None):
             if args.sqlmap_param not in urllib.parse.parse_qs(urllib.parse.urlsplit(args.sqlmap_url).query,
                                                              keep_blank_values=True):
                 raise ValueError("The SQLmap parameter must exist in the URL query string.")
-    except (ValueError, argparse.ArgumentTypeError) as exc:
+    except (ValueError, OSError, argparse.ArgumentTypeError) as exc:
         p.error(str(exc))
     args.wordlist = args.wordlist.expanduser()
     if args.enum != "none" and not args.wordlist.is_file():
         p.error(f"Wordlist not found: {args.wordlist}")
     root = args.output.expanduser().resolve() / (
-        args.target + "_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6])
+        re.sub(r'[^A-Za-z0-9_.-]', '_', args.target) + "_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6])
     root.mkdir(parents=True)
     runner = Runner(args.dry_run)
-    summary = {"version": VERSION, "target": args.target, "created": dt.datetime.now(dt.timezone.utc).isoformat(),
+    summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
+               "input_url": args.input_url, "scan_ip": args.scan_ip,
+               "created": dt.datetime.now(dt.timezone.utc).isoformat(),
                "mode": args.mode, "dry_run": args.dry_run, "ports": [], "probes": [], "jobs": [],
                "outcome": "Discovery started."}
     say(f"Abdulla WebScan {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
@@ -594,20 +613,25 @@ def main(argv=None):
             folder = root / "nmap"
             cmd = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-n", "-T3", "--max-rate", "100",
                    "--max-retries", "1", "--host-timeout", f"{args.nmap_timeout}s"]
+            if ':' in args.scan_ip:
+                cmd.append('-6')
             cmd += ["-p", "1-65535"] if args.all_ports else (["-p", args.ports] if args.ports else ["--top-ports", "1000"])
-            cmd += ["-oX", str(folder / "services.xml"), args.target]
+            cmd += ["-oX", str(folder / "services.xml"), args.scan_ip]
             result = runner.execute(Job("Nmap TCP/services", "nmap", cmd, folder,
                                         args.nmap_timeout + 10, ["services.xml"]))
             summary["jobs"].append(result)
             if not args.dry_run and (folder / "services.xml").exists():
                 try:
-                    summary["ports"] = parse_nmap(folder / "services.xml", args.target)
+                    summary["ports"] = parse_nmap(folder / "services.xml", args.scan_ip)
                 except (ET.ParseError, ValueError, OSError) as exc:
                     summary["outcome"] = "Nmap XML incomplete/unreadable: " + str(exc)
         # If Nmap is absent/failed, only try common ports within a requested port scope.
         fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
         services = summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback]
-        candidate_urls = list(dict.fromkeys([url.rstrip("/") + "/" for url in args.url] + candidates(args.target, services)))
+        base_urls = [url.rstrip('/') + '/' for url in args.url]
+        if args.input_url:
+            base_urls.insert(0, args.input_url)
+        candidate_urls = list(dict.fromkeys(base_urls + ([] if args.url_only else candidates(args.target, services))))
         if args.dry_run:
             live = candidate_urls
             summary["outcome"] = "Dry run: planned commands only; HTTP discovery and scanners were not executed."

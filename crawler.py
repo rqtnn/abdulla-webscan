@@ -1,4 +1,4 @@
-"""Bounded, unauthenticated HTML discovery for one IP's responding origins."""
+"""Bounded, unauthenticated HTML discovery for one host's responding origins."""
 from collections import Counter, deque
 import hashlib
 from html.parser import HTMLParser

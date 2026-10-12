@@ -4,21 +4,10 @@ import json
 import re
 import urllib.parse
 from pathlib import Path
+from scope import normalize_url
 
 
-def normalize_url(value, target):
-    u = urllib.parse.urlsplit(value)
-    if (u.scheme not in ('http', 'https') or u.hostname != target or
-            u.username or u.password or any(ord(c) < 32 for c in value)):
-        raise ValueError('Result URL is outside the single-IP scope or invalid')
-    port = u.port or (443 if u.scheme == 'https' else 80)
-    if u.port is not None and not 1 <= u.port <= 65535:
-        raise ValueError('Invalid result URL port')
-    authority = target if port == (443 if u.scheme == 'https' else 80) else f'{target}:{port}'
-    return urllib.parse.urlunsplit((u.scheme, authority, u.path or '/', u.query, ''))
-
-
-def observations(tool, row, base):
+def observations(tool, row, base, scan_ip=None):
     """Yield category, check identity, URL, title, scanner severity."""
     if not isinstance(row, dict):
         raise ValueError('Expected a result object')
@@ -41,7 +30,7 @@ def observations(tool, row, base):
     elif tool == 'nikto':
         if 'vulnerabilities' not in row:
             raise ValueError('Missing vulnerabilities array')
-        if row.get('ip') and row['ip'] != urllib.parse.urlsplit(base).hostname:
+        if row.get('ip') and row['ip'] != (scan_ip or urllib.parse.urlsplit(base).hostname):
             raise ValueError('Nikto host is outside the single-IP scope')
         for item in row.get('vulnerabilities', []):
             check = str(item.get('id') or item.get('OSVDB') or item.get('msg', ''))
@@ -121,7 +110,7 @@ def collect(root, summary):
                             row = {'url': urllib.parse.urljoin(base, match[1]), 'status': int(match[2])}
                         else:
                             row = json.loads(raw) if isinstance(raw, str) else raw
-                        for category, check, url, title, severity in observations(tool, row, base):
+                        for category, check, url, title, severity in observations(tool, row, base, summary.get('scan_ip')):
                             url = normalize_url(url, summary['target'])
                             key = (category, check if category == 'endpoint' else tool + ':' + check, url)
                             entry = merged.setdefault(key, {'id': hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16],
