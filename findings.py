@@ -1,10 +1,11 @@
-"""Offline scanner adapters. Matches are observations, never validated claims."""
+"""Rqtn Tool offline adapters. Matches are observations requiring validation."""
 import hashlib
 import json
 import re
 import urllib.parse
 from pathlib import Path
 from scope import normalize_url
+from checks import security_headers
 
 
 def sqlmap_outcome(job):
@@ -73,22 +74,15 @@ def observations(tool, row, base, scan_ip=None):
         yield 'endpoint', str(row['status']), url, f'HTTP endpoint ({row["status"]})', 'info'
         if row.get('phpinfo_signature'):
             yield 'scanner_match', 'phpinfo-content', url, 'PHP configuration information exposed candidate', 'medium'
-        headers = {k.lower(): v for k, v in row.get('headers', [])}
-        if 200 <= row['status'] < 300 and 'html' in headers.get('content-type', '').lower():
-            checks = [('content-security-policy', 'Content-Security-Policy header missing'),
-                      ('x-content-type-options', 'X-Content-Type-Options header missing')]
-            if urllib.parse.urlsplit(url).scheme == 'https':
-                checks.append(('strict-transport-security', 'HSTS header missing'))
-            for header, title in checks:
-                if header not in headers:
-                    yield 'configuration', header, url, title, 'low'
+        for header, title in security_headers(url, row['status'], row.get('headers', [])):
+            yield 'configuration', header, url, title, 'low'
     elif tool == 'httpx':
         if not row.get('url'):
             raise ValueError('Missing URL')
         yield 'technology', 'httpx', url, 'HTTP metadata', 'info'
     elif tool == 'checks':
-        if row.get('outcome') == 'candidate':
-            yield 'scanner_match', row['check'] + ':' + row['parameter'], url, row['title'], row['severity']
+        for match in row.get('matches', [row] if row.get('outcome') == 'candidate' else []):
+            yield 'scanner_match', match['check'] + ':' + row.get('parameter', ''), url, match['title'], match['severity']
     elif tool == 'whatweb':
         if not row.get('target') or not isinstance(row.get('plugins'), dict):
             raise ValueError('Missing target/plugins')

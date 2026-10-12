@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Single-host web assessment runner. Python 3.10+, Linux/Kali/WSL.
+"""Rqtn Tool single-host assessment runner. Python 3.10+, Linux/Kali/WSL.
 
 External scanners stay external: this script schedules them and records evidence.
 """
@@ -13,6 +13,7 @@ import html
 import http.client
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -30,10 +31,13 @@ import xml.etree.ElementTree as ET
 from findings import collect
 from crawler import crawl, select_candidates, origin
 from scope import parse_target, prepare_target, normalize_url, authority
-from checks import run_checks
+from checks import run_checks, run_sensitive_files
+from scope import RequestGate
+from terminal import TerminalUI, BANNER
 from findings import finding_groups, sqlmap_outcome
 
-VERSION = "1.3.0"
+VERSION = "2.0.0"
+UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
@@ -42,7 +46,40 @@ PRINT_LOCK = threading.Lock()
 
 def say(message):
     with PRINT_LOCK:
-        print(message, flush=True)
+        UI.message(message)
+
+
+def nonnegative(value):
+    number = float(value)
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError('Must be a finite nonnegative number.')
+    return number
+
+
+def with_progress(name, function, *positional, **options):
+    with UI.stage(name) as progress:
+        if progress:
+            options['progress'] = progress
+        return function(*positional, **options)
+
+
+def export_reports(root, destination):
+    """Export a report while keeping the complete evidence directory."""
+    destination = destination.expanduser().resolve()
+    if destination.suffix.lower() not in ('.json', '.html'):
+        raise ValueError('Report export requires .json or .html')
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    prefix = Path(os.path.relpath(root, destination.parent)).as_posix()
+    if destination.suffix.lower() == '.json':
+        document = json.loads((root / 'summary.json').read_text(encoding='utf-8'))
+        document['evidence_directory'] = prefix
+        destination.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding='utf-8')
+    else:
+        document = (root / 'report.html').read_text(encoding='utf-8')
+        document = re.sub(r'href="([^"#]+)"', lambda match: 'href="' +
+            html.escape(urllib.parse.quote(prefix, safe='/') + '/' + html.unescape(match[1]), quote=True) + '"', document)
+        destination.write_text(document, encoding='utf-8')
+    return destination
 
 
 def ipv4(value):
@@ -140,7 +177,7 @@ def probe(url, insecure=False, timeout=5):
         else:
             conn = http.client.HTTPConnection(u.hostname, u.port, timeout=timeout)
         conn.request("GET", urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
-                     headers={"User-Agent": "Abdulla-WebScan/" + VERSION})
+                     headers={"User-Agent": "Rqtn-Tool/" + VERSION})
         response = conn.getresponse()
         body = response.read(65536).decode("utf-8", "replace")
         title = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
@@ -370,12 +407,33 @@ def sqlmap_job(args, root, url, parameter, name, automatic=False):
                min(args.tool_timeout, args.sqli_timeout) if automatic else args.tool_timeout, ['traffic.log'])
 
 
+def run_file_stage(args, root, live, summary, runner):
+    files_folder = root / 'sensitive-files'
+    started = time.monotonic()
+    try:
+        summary['sensitive_files'] = with_progress('Checking sensitive files', run_sensitive_files,
+            live, args.target, args.wordlist, files_folder, runner.stop, rate=args.rate,
+            timeout=args.checks_timeout, insecure=args.insecure, session=getattr(args, 'session', None),
+            workers=args.http_workers, delay=args.delay, gate=getattr(args, 'request_gate', None), limit=args.file_limit)
+    finally:
+        state_file = files_folder / 'checks.json'
+        if state_file.exists():
+            state = json.loads(state_file.read_text(encoding='utf-8'))
+            summary['sensitive_files'] = state
+            summary['jobs'].append(dict(name='Sensitive file content checks', tool='checks', argv=[],
+                command='Built-in scoped GET probes with soft-404 control', folder=str(files_folder),
+                outputs=['checks.json'], status=state['status'], elapsed=round(time.monotonic() - started, 2),
+                exit_code=None, note='Content signatures are candidates needing validation.'))
+
+
 def run_discovered(args, root, live, summary, runner, binaries):
     """Discovery and checks are separate stages; only in-scope URLs become inputs."""
     summary['crawl'] = {'status': 'disabled' if args.no_crawl else 'planned',
                         'pages': [], 'discovered': [], 'forms': [], 'limits': []}
     summary['injection'] = {'status': 'disabled' if args.no_auto_sqli else 'pending',
                             'selected': [], 'excluded': []}
+    if args.sensitive_files and not args.dry_run and not runner.stop.is_set() and live:
+        run_file_stage(args, root, live, summary, runner)
     if args.no_crawl or args.dry_run or runner.stop.is_set() or not live:
         if args.dry_run:
             summary['injection']['status'] = 'planned_after_discovery' if not args.no_auto_sqli else 'disabled'
@@ -385,13 +443,20 @@ def run_discovered(args, root, live, summary, runner, binaries):
     observed, _ = collect(root, summary)
     allowed = {origin(url) for url in live}
     seeds = live + [f['url'] for f in observed if f['category'] == 'endpoint'
-                    and f['check'].isdigit() and 200 <= int(f['check']) < 300 and origin(f['url']) in allowed]
+                    and f['check'].isdigit() and 200 <= int(f['check']) < 400 and origin(f['url']) in allowed]
     folder = root / 'crawl'
+    folder.mkdir(parents=True, exist_ok=True)
     say('[CRAWL] Discovering same-host pages and GET parameters')
     started = time.monotonic()
     try:
-        crawl(seeds, args.target, folder, runner.stop, args.crawl_pages, args.crawl_depth,
-              args.rate, args.crawl_timeout, args.insecure, summary['crawl'])
+        options = {'workers': args.http_workers, 'delay': args.delay,
+                   'gate': getattr(args, 'request_gate', None)}
+        if args.crawl_redirects:
+            options['follow_redirects'] = True
+        if getattr(args, 'session', None):
+            options['session'] = args.session
+        with_progress('Discovering routes', crawl, seeds, args.target, folder, runner.stop, args.crawl_pages, args.crawl_depth,
+              args.rate, args.crawl_timeout, args.insecure, summary['crawl'], **options)
     except KeyboardInterrupt:
         summary['crawl']['status'] = 'cancelled'
         raise
@@ -402,20 +467,24 @@ def run_discovered(args, root, live, summary, runner, binaries):
             'outputs': ['crawl.json'], 'status': summary['crawl']['status'],
             'elapsed': round(time.monotonic() - started, 2), 'exit_code': None,
             'note': ', '.join(summary['crawl']['limits'])})
-    urls = summary['crawl']['discovered']
+    urls = [url for url in summary['crawl']['discovered']
+            if not urllib.parse.urlsplit(url).path.lower().endswith('.js')]
     (folder / 'urls.txt').write_text('\n'.join(urls) + ('\n' if urls else ''), encoding='utf-8')
     selected, excluded = select_candidates(urls, args.max_sqli_jobs)
     summary['injection'].update(selected=selected, excluded=excluded)
     if runner.stop.is_set():
         summary['injection']['status'] = 'cancelled'
         return
-    if args.active_checks and not args.no_active_checks:
+    if (args.active_checks or args.builtin_sqli or args.time_sqli) and not args.no_active_checks:
         checks_folder = root / 'checks'
         started = time.monotonic()
         say('[CHECKS] Comparing GET controls with inert reflection and redirect probes')
         try:
-            summary['active_checks'] = run_checks(selected, args.target, checks_folder, runner.stop,
-                args.rate, args.checks_timeout, args.insecure)
+            options = {'session': args.session} if getattr(args, 'session', None) else {}
+            summary['active_checks'] = with_progress('Checking GET parameters', run_checks,
+                selected, args.target, checks_folder, runner.stop,
+                args.rate, args.checks_timeout, args.insecure, workers=args.http_workers, delay=args.delay,
+                gate=getattr(args, 'request_gate', None), sqli=args.builtin_sqli, time_sqli=args.time_sqli, **options)
         finally:
             state_file = checks_folder / 'checks.json'
             if state_file.exists():
@@ -425,14 +494,19 @@ def run_discovered(args, root, live, summary, runner, binaries):
                     command='Built-in control/probe GET checks; no redirects followed', folder=str(checks_folder),
                     outputs=['checks.json'], status=state['status'], elapsed=round(time.monotonic() - started, 2),
                     exit_code=None, note='No-match is limited to these probes; candidates need validation.'))
-    if urls and 'nuclei' not in args.skip:
+    additional_urls = [url for url in urls if url not in live]
+    (folder / 'scanner-urls.txt').write_text('\n'.join(additional_urls), encoding='utf-8')
+    if additional_urls and 'nuclei' not in args.skip and not getattr(args, 'session', None):
         job = next(j for j in build_jobs(args, root / 'discovered', [live[0]], binaries) if j.tool == 'nuclei')
         index = job.argv.index('-u')
-        job.argv[index:index + 2] = ['-l', str(folder / 'urls.txt')]
+        job.argv[index:index + 2] = ['-l', str(folder / 'scanner-urls.txt')]
         job.name = 'Nuclei discovered URLs'
         summary['jobs'].append(runner.execute(job))
     if args.no_auto_sqli or 'sqlmap' in args.skip:
         summary['injection']['status'] = 'disabled'
+        return
+    if getattr(args, 'session', None):
+        summary['injection']['status'] = 'requires_authenticated_scanner'
         return
     summary['injection']['status'] = 'completed' if selected else 'no_candidates'
     # Automatic injection jobs run sequentially, independent of scanner parallelism.
@@ -490,6 +564,12 @@ def write_reports(root, summary):
         'crawl_status': summary.get('crawl', {}).get('status', 'not_run'),
         'crawl_requests': summary.get('crawl', {}).get('requests', 0),
         'discovered_urls': len(summary.get('crawl', {}).get('discovered', [])),
+        'javascript_pages': sum(urllib.parse.urlsplit(p['url']).path.lower().endswith('.js')
+            for p in summary.get('crawl', {}).get('pages', [])),
+        'session_scope': summary.get('session_scope', 'unauthenticated'),
+        'discovery_assessment': ('limited_discovery' if summary.get('crawl', {}).get('requests', 0) <= 1
+            else 'bounded_discovery; route count does not prove complete coverage'),
+        'coverage_note': 'No automatic guarantee of authorization, business-logic, POST, or JavaScript execution coverage.',
         'crawl_errors': sum('error' in p for p in summary.get('crawl', {}).get('pages', [])),
         'truncated_pages': sum(bool(p.get('truncated')) for p in summary.get('crawl', {}).get('pages', [])),
         'forms_for_manual_review': sum(bool(f.get('reason')) for f in summary.get('crawl', {}).get('forms', [])),
@@ -501,6 +581,8 @@ def write_reports(root, summary):
             for c in summary.get('injection', {}).get('selected', [])),
         'active_checks_status': summary.get('active_checks', {}).get('status', 'not_run'),
         'active_checks_requests': summary.get('active_checks', {}).get('requests', 0)}
+    summary['coverage']['sensitive_files_status'] = summary.get('sensitive_files', {}).get('status', 'not_run')
+    summary['coverage']['sensitive_files_requests'] = summary.get('sensitive_files', {}).get('requests', 0)
     summary['report_schema_version'] = 3
     (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     esc = lambda value: html.escape(str(value), quote=True)
@@ -544,27 +626,27 @@ def write_reports(root, summary):
     report = f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
-<title>Abdulla WebScan — {esc(summary['target'])}</title>
+<title>Rqtn Tool — {esc(summary['target'])}</title>
 <style>body{{background:#101827;color:#e6edf7;font:15px system-ui;margin:0;padding:32px}}
 main{{max-width:1400px;margin:auto}}h1{{color:#85ddce}}h2{{margin-top:32px}}a{{color:#85ddce}}
 table{{width:100%;border-collapse:collapse;background:#172235}}td,th{{text-align:left;padding:12px;
 border-bottom:1px solid #2e3e55;vertical-align:top;overflow-wrap:anywhere}}th{{color:#a3b8cf}}
 .scroll{{overflow:auto}}.note{{background:#203149;padding:16px;border-radius:8px;line-height:1.6}}
-</style><main><h1>Abdulla WebScan</h1><p>Target: {esc(summary['target'])} ·
+</style><main><h1>Rqtn Tool</h1><p>Target: {esc(summary['target'])} ·
 {esc(summary['created'])} · Mode: {esc(summary['mode'])}</p>
 <div class="note">{esc(summary['outcome'])}<br>Scanner matches require manual validation.
 Completed means the process exited successfully; it does not certify the site is secure.
 Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an evidence index,
 not a validated penetration testing report. Each active web job uses its own rate cap;
 parallel mode adds those rates. HTTP errors and redirects are recorded as responses.
-Redirect destinations are displayed for review.</div>
-<h2>Assessment coverage</h2><p>Unauthenticated web assessment of one host. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
+Built-in HTTP workers share one start-rate gate. Redirect destinations are displayed for review.</div>
+<h2>Assessment coverage</h2><p>One-host web assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 HTTP uses the target hostname for Host headers, TLS SNI and certificate verification. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
 <h2>Grouped assessment findings</h2><p>Repeated header notes are grouped; individual URLs and raw evidence remain below.</p>
 <div class="scroll"><table><tr><th>Observation</th><th>Severity</th><th>Validation</th><th>Affected URLs</th></tr>{grouped_rows}</table></div>
-<h2>Discovered GET parameter checks</h2><p>Candidates are not proof of injection. Checks use SQLmap detection only.
+<h2>Discovered GET parameter checks</h2><p>Candidates are not proof of injection. Built-in controls/probes and optional SQLmap detection preserve separate evidence.
 POST forms, JavaScript execution and authenticated workflows require separate review.</p>
 <div class="scroll"><table><tr><th>URL</th><th>Parameter</th><th>Job status</th><th>Detection outcome</th><th>Selection/review reason</th></tr>{injection_rows}</table></div>
 <h2>Deferred forms</h2><div class="scroll"><table><tr><th>Source</th><th>Method</th><th>Action</th><th>Review reason</th></tr>{forms_rows}</table></div>
@@ -586,13 +668,18 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 
 
 def parser():
-    p = argparse.ArgumentParser(description="Abdulla WebScan: one-host web assessment pipeline for authorized labs.")
+    p = argparse.ArgumentParser(description="Rqtn Tool: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
+    p.add_argument('--target', dest='target_option', type=target_input, help='Alternative to the positional target.')
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
     p.add_argument('--profile', choices=('standard', 'lab'), default='standard',
                    help='lab: larger crawl budgets, BEUT SQLi detection and bounded differential GET checks.')
     p.add_argument('--report-only', type=Path, help='Rebuild reports from an existing run directory; no network/scanners.')
     p.add_argument("--workers", type=positive, default=2, help="Concurrent web tools, default 2.")
+    p.add_argument('--http-workers', type=positive, default=4, help='Built-in HTTP workers, 1..8; timing checks use one.')
+    p.add_argument('--delay', type=nonnegative, default=0, help='Minimum seconds between built-in HTTP starts, shared across workers; external tools use --rate.')
+    p.add_argument('--ui', choices=('auto', 'rich', 'plain'), default='auto')
+    p.add_argument('--no-banner', action='store_true')
     p.add_argument("--enum", choices=("auto", *ENUM_TOOLS, "all", "none"), default="auto")
     p.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
     p.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
@@ -612,6 +699,8 @@ def parser():
     p.add_argument('--crawl-pages', type=positive, default=100, help='Maximum crawler GET requests, default 100.')
     p.add_argument('--crawl-depth', type=positive, default=3, help='Maximum link depth, default 3.')
     p.add_argument('--crawl-timeout', type=positive, default=120, help='Crawler time budget in seconds, default 120.')
+    p.add_argument('--crawl-redirects', action='store_true', help='Follow same-origin, non-action redirects within crawl budgets.')
+    p.add_argument('--cookie-file', type=Path, help='One Cookie header value; built-in crawler/checks only, target URL origin required.')
     p.add_argument('--no-auto-sqli', action='store_true', help='Inventory GET parameters without automatic SQLmap checks.')
     p.add_argument('--max-sqli-jobs', type=positive, default=10, help='Maximum discovered URL/parameter checks, default 10.')
     p.add_argument('--sqli-timeout', type=positive, default=120, help='Seconds per automatic SQLmap job, default 120.')
@@ -619,15 +708,24 @@ def parser():
     p.add_argument('--active-checks', action='store_true', help='Bounded inert HTML reflection and external redirect GET probes.')
     p.add_argument('--no-active-checks', action='store_true', help='Disable differential checks, including in lab profile.')
     p.add_argument('--checks-timeout', type=positive, default=120, help='Time budget for differential checks.')
-    p.add_argument("--output", type=Path, default=Path("results"), help="Parent folder; every run gets a new directory.")
+    p.add_argument('--builtin-sqli', action='store_true', help='Preliminary quote/error signature checks with a control response.')
+    p.add_argument('--time-sqli', action='store_true', help='Opt-in repeated one-second MySQL delay anomaly probes, serialized; not proof of SQLi.')
+    p.add_argument('--sensitive-files', action='store_true', help='Bounded wordlist GETs with baseline and content signatures.')
+    p.add_argument('--file-limit', type=positive, default=100, help='Maximum sensitive-file URLs across all origins, <=1000.')
+    p.add_argument("--output", type=Path, default=Path("results"), help="Run parent directory, or report.json/report.html with a separate evidence directory.")
     p.add_argument("--version", action="version", version=VERSION)
     return p
 
 
 def main(argv=None):
+    global UI
     p = parser()
     argv = list(sys.argv[1:] if argv is None else argv)
     args = p.parse_args(argv)
+    if args.target and args.target_option:
+        p.error('Use either positional target or --target, not both.')
+    args.target = args.target or args.target_option
+    UI = TerminalUI(args.ui)
     apply_profile(args, argv)
     if args.report_only:
         root = args.report_only.expanduser().resolve()
@@ -639,6 +737,8 @@ def main(argv=None):
                     candidate['detection_outcome'] = sqlmap_outcome(job)
             summary['report_generator_version'] = VERSION
             write_reports(root, summary)
+            if args.output.suffix.lower() in ('.json', '.html'):
+                export_reports(root, args.output)
         except (OSError, ValueError, KeyError, TypeError) as exc:
             p.error(f'Cannot rebuild this run: {exc}')
         say(f'Rebuilt report: {root / "report.html"}')
@@ -654,19 +754,26 @@ def main(argv=None):
         return 0
     if not args.target:
         try:
-            args.target = target_input(input("Lab target IP, hostname or URL: "))
+            entered = input('Rqtn Tool target URL/IP (e.g. http://127.0.0.1:3000): ').strip()
+            args.target = target_input(entered if '://' in entered else 'http://' + entered)
         except (argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
     if args.ports and args.all_ports:
         p.error("Use either --ports or --all-ports.")
-    if args.workers > 8 or args.rate > 50:
-        p.error("Use workers <= 8 and rate <= 50 for this lab runner.")
+    if args.workers > 8 or args.http_workers > 8 or args.file_limit > 1000 or args.rate > 50:
+        p.error("Use workers/http-workers <= 8, file-limit <= 1000 and rate <= 50.")
     if args.crawl_pages > 1000 or args.crawl_depth > 10 or args.max_sqli_jobs > 50:
         p.error('Use crawl-pages <= 1000, crawl-depth <= 10 and max-sqli-jobs <= 50.')
     if bool(args.sqlmap_url) != bool(args.sqlmap_param):
         p.error("Use --sqlmap-url and --sqlmap-param together.")
     try:
         prepare_target(args)
+        args.session = None
+        if args.cookie_file:
+            if not args.input_url:
+                raise ValueError('--cookie-file requires a target HTTP(S) URL to bind the session to one origin')
+            from session import Session
+            args.session = Session(args.input_url, args.cookie_file.expanduser())
         if args.input_url:
             u = urllib.parse.urlsplit(args.input_url)
             if args.ports and (u.port or (443 if u.scheme == 'https' else 80)) not in listed_ports(args.ports):
@@ -693,17 +800,26 @@ def main(argv=None):
     args.wordlist = args.wordlist.expanduser()
     if args.enum != "none" and not args.wordlist.is_file():
         p.error(f"Wordlist not found: {args.wordlist}")
-    root = args.output.expanduser().resolve() / (
+    export_path = args.output if args.output.suffix.lower() in ('.json', '.html') else None
+    output_parent = (args.output.parent / (args.output.stem + '.evidence')) if export_path else args.output
+    root = output_parent.expanduser().resolve() / (
         re.sub(r'[^A-Za-z0-9_.-]', '_', args.target) + "_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6])
     root.mkdir(parents=True)
     runner = Runner(args.dry_run)
+    args.request_gate = RequestGate(args.rate, args.delay)
     summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
                "input_url": args.input_url, "scan_ip": args.scan_ip,
                "created": dt.datetime.now(dt.timezone.utc).isoformat(),
                "mode": args.mode, "profile": args.profile, "sqli_techniques": args.sqli_techniques,
                "dry_run": args.dry_run, "ports": [], "probes": [], "jobs": [],
                "outcome": "Discovery started."}
-    say(f"Abdulla WebScan {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
+    summary['built_in_http'] = {'workers': args.http_workers, 'delay': args.delay, 'rate': args.rate,
+                               'time_checks_workers': 1 if args.time_sqli else None}
+    summary['session_scope'] = ('Built-in crawler and GET checks only; external scanners are unauthenticated; '
+        'automatic SQLmap and discovered Nuclei deferred' if args.session else 'unauthenticated')
+    if not args.no_banner:
+        say(BANNER)
+    say(f"Rqtn Tool {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
     try:
         if "nmap" not in args.skip:
             folder = root / "nmap"
@@ -761,6 +877,9 @@ def main(argv=None):
         if runner.stop.is_set():
             summary["outcome"] = "Run interrupted; results are incomplete."
         write_reports(root, summary)
+        if export_path:
+            say(f'Exported report: {export_reports(root, export_path)}')
+        UI.severity_table(summary['coverage']['severity_counts'])
         say(f"\nReport: {root / 'report.html'}")
     if runner.stop.is_set():
         return 130

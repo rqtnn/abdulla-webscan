@@ -1,0 +1,2 @@
+# Optional terminal presentation; scanner runtime otherwise uses the standard library.
+rich==14.3.4

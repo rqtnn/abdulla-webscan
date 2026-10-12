@@ -31,3 +31,8 @@ wp-admin
 wp-login.php
 wp-json
 phpmyadmin
+backup.zip
+backup.sql
+database.sql
+config.php.bak
+index.php.old

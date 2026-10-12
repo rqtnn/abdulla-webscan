@@ -1,407 +1,271 @@
-# Abdulla WebScan
+# Rqtn Tool
 
-## وضع اللاب وتحسين التحقق — 1.3.0
+Rqtn Tool 2.0 is a modular Python web assessment tool for one authorized lab host.
+It discovers web routes, inventories forms, runs bounded preliminary checks and
+combines external scanner output into evidence-preserving JSON/HTML reports.
+Every finding is marked `needs_validation`; a successful process exit is not
+proof of complete coverage or the absence of vulnerabilities.
+
+## Project structure
+
+```text
+rqtn-tool/
+  rqtn.py          # Branded CLI entry point
+  webscan.py       # CLI/orchestration; existing imports remain compatible
+  crawler.py       # Concurrent HTML/JavaScript discovery and form inventory
+  checks.py        # Reflection, redirects, SQL error/timing and file checks
+  scope.py         # Single-host normalization, origins, redirects and pacing
+  session.py       # Explicit origin-bound Cookie file for built-in requests
+  findings.py      # Scanner adapters, deduplication, headers and evidence
+  terminal.py      # ASCII banner, optional Rich progress/severity UI
+  requirements.txt
+  wordlist.txt
+  tests/
+```
+
+Generic module names are retained for import compatibility. Use `rqtn.py` for
+the new CLI; `webscan.py` remains a compatible entry point.
+
+## Install on Kali/Linux
+
+Python 3.10+ is required. Extract the release into a folder called `rqtn-tool`.
 
 ```bash
-python3 webscan.py --version
-python3 webscan.py --check
-# ضع قوالب Nuclei في مسار ثابت؛ هذه خطوة تجهيز وليست فحصاً للموقع
+cd rqtn-tool
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+python rqtn.py --version
+python rqtn.py --check
+python -m unittest discover -s tests -v
+```
+
+Rich is optional: without it the CLI uses plain text. No aiohttp dependency is
+required. Install external scanner executables separately on Kali and put them
+on PATH; `--check` lists the exact tools available. The pipeline supports Nmap,
+ProjectDiscovery httpx/httpx-toolkit, WhatWeb, ffuf, Gobuster, Feroxbuster,
+Dirsearch, Nikto, Nuclei and SQLmap. Missing tools are reported as coverage gaps.
+Kali's `httpx-toolkit` is distinct from the Python HTTPX library.
+
+Nuclei requires local YAML templates; `--templates PATH` overrides automatic
+legacy/XDG/Kali path discovery. A templates update is a separate preparation step:
+
+```bash
 nuclei -ut -ud "$HOME/nuclei-templates"
-python3 webscan.py 'https://pentest-ground.com:4280' --profile lab \
-  --templates "$HOME/nuclei-templates" --rate 3
 ```
 
-وضع `lab` يستخدم 300 طلب crawling، عمق 5، ميزانية crawling 600 ثانية،
-و20 اختبار SQLmap كحد أقصى، 180 ثانية لكل اختبار. يضيف Time-based blind إلى
-Boolean/Error/Union (`BEUT`)، بمستوى 1 وخطورة 1 وبدون dump أو أوامر على السيرفر.
-الخيارات التي تذكرها صراحةً تتقدم على إعدادات الوضع. الفحص قد يستغرق وقتاً،
-والميزانية لا تضمن انتهاء كل أدوات الشبكة في زمن دقيق.
+## Run on Windows through WSL
 
-تحسينات معالجة النماذج: يحافظ على أول زر submit مسمى لتمرير معاملات مثل
-`Submit=Submit`، لكنه لا يختبر زر الإرسال نفسه كمعامل حقن. يفضل القيم غير الفارغة
-المكتشفة؛ وعندما لا تتوفر، يبدأ `id` وأسماء المعرفات المشابهة بالقيمة `1`،
-والمعاملات الأخرى بـ`webscan`. يحفظ الرابط الأصلي والقيمة المستخدمة في التقرير.
-هذه قيم بداية عامة، وليست تأكيداً أن معالج الصفحة اشتغل. POST، upload، password،
-select/textarea ونماذج تحتاج جلسة أو CSRF مؤجلة ومذكورة في التقرير.
-
-وضع اللاب يفعّل أيضاً فحوص GET تفاضلية داخل الأداة: طلب تحكم ثم علامة HTML
-غير تنفيذية لكشف الانعكاس غير المهرب، أو وجهة `https://webscan.invalid/…` لمعامل
-تحويل معروف. لا يتبع التحويل ولا يتصل بوجهته. يحفظ جسم الاستجابتين، headers،
-الطلبين وSHA256 تحت `checks/`. انعكاس العلامة لا يثبت تنفيذ JavaScript أو XSS؛
-النتيجة مرشح يحتاج تحقق سياق. حالات الخطأ والقص تظهر غير حاسمة.
-لإيقاف هذه الفحوص استخدم `--no-active-checks`، ولتفعيلها في الوضع العادي
-استخدم `--active-checks`. حد الوقت `--checks-timeout`.
-
-يعالج 1.3 فشل Nikto مع hostname بإزالة `-nolookup`؛ هذا الخيار يرفض الأسماء.
-ويكتشف قوالب Nuclei من `--templates` الصريح، أو `NUCLEI_TEMPLATES_DIR`، أو
-`~/nuclei-templates`، أو مسارات XDG وKali. المجلد الفارغ يظل فجوة واضحة ولا يحسب
-فحصاً ناجحاً. بعض مسارات Nuclei المخصصة المحفوظة في إعداداته قد تتطلب `--templates`.
-
-التقرير schema 3 يجمع الهيدرات المتكررة لكل origin في مجموعات، مع الاحتفاظ
-بكل صفحة ودليل في `findings`. `severity_counts` تعد المجموعات و
-`severity_instance_counts` تعد الحالات الفردية. ملاحظات محدودية adapter منفصلة
-عن أخطاء قراءة البيانات. نتائج SQLmap تميز بين مرشح، لا تطابق ضمن التقنيات
-المختبرة، وغير حاسم؛ انتهاء البرنامج بخروج 0 وحده لا يثبت نجاح الكشف.
-صفحة phpinfo تُسجل كمرشح إفشاء معلومات فقط عند وجود توقيعات محتواها، وليس اسمها.
-
-لإعادة بناء تقرير سابق من أدلته بدون إرسال أي طلب:
-
-```bash
-python3 webscan.py --report-only results/pentest-ground.com_TIMESTAMP_ID
-```
-
-استخدم مسار التشغيل الفعلي مكان المثال. إعادة بناء تقرير قديم لا تصلح الطلبات
-القديمة الناقصة؛ تحتاج تشغيلًا جديدًا لتجربة إصلاح النماذج وNikto.
-فحص هذا اللاب بالكامل ما زال يحتاج نتائج تشغيل Linux والتحقق من الفجوات؛ الأداة
-لا تنفذ JavaScript ولا تغطي تلقائياً منطق الأعمال أو الدخول أو كل ثغرات DVWA.
-
-الاختبارات: `python3 -m unittest discover -s tests -v`. تشمل خادم HTTP محلياً
-للتحويل والانعكاس المهرب وغير المهرب، الأدلة والمقارنة والحدود، معالجة النماذج،
-اختيار القوالب، وتجميع التقرير. لا تفحص موقعاً خارجياً أثناء الاختبارات.
-
-## IP أو hostname أو URL — 1.2
-
-تقبل الأداة هدفاً واحداً: IPv4، IPv6، اسم نطاق، أو رابط HTTP/HTTPS كامل.
-مثال الموقع التدريبي الذي اخترته، بدون تحويل الرابط إلى IP يدوياً:
-
-```bash
-python3 webscan.py 'https://pentest-ground.com:4280' --rate 3
-python3 webscan.py 'http://192.168.56.101:8080/app/'
-python3 webscan.py 192.168.56.101
-python3 webscan.py lab.example
-python3 webscan.py 'http://[::1]:8080/'
-```
-
-الرابط يحتفظ بالمسار والـquery، والـfragment يُحذف لأنه لا يُرسل للسيرفر.
-إذا أعطيت URL بدون `--ports` أو `--all-ports`، Nmap يفحص منفذ الرابط فقط
-(443 لـHTTPS أو 80 لـHTTP إن لم تذكر منفذاً)، ويبدأ الويب من الرابط نفسه.
-إذا ذكرت قائمة بورتات، لازم تحتوي منفذ الرابط. للروابط استخدم `http://` أو
-`https://`؛ اسم النطاق بدون scheme مقبول كهدف لاكتشاف الخدمات.
-
-عند إدخال hostname، يحل DNS ويختار IP واحداً لـNmap (IPv4 أولاً، وإلا IPv6
-مع `-6`). أدوات HTTP والـcrawler تحتفظ باسم النطاق كي تعمل Host headers وSNI
-والتحقق من شهادة HTTPS بشكل صحيح. لا تحتاج `--insecure` إلا إذا كانت شهادة
-اللاب غير موثوقة. فحص المسارات يستخدم مجلد صفحة الرابط، ولا يضيف FUZZ إلى query.
-
-نطاق الويب هو نفس اسم الهدف بالضبط، أو نفس عنوان IP إذا أدخلت IP؛ لا يتوسع إلى
-subdomains أو أسماء أخرى حتى لو كانت تشير لنفس IP. DNS لأدوات الويب طبيعي،
-وقد يختار عنواناً مختلفاً لنفس النطاق في المواقع ذات CDN أو عدة backends؛
-اختيار IP واحد لـNmap ليس network sandbox أو تثبيتاً لكل اتصالات الأدوات الخارجية.
-دعم IPv6 في الأداة لا يضمن دعم كل scanner خارجي أو كل قوالبه له.
-ما زالت credentials داخل URL، قوائم الأهداف، CIDR/ranges وFTP مرفوضة.
-`--dry-run` لا يحل DNS ولا يرسل طلبات. التقرير يسجل `input_target` و`input_url`
-و`scan_ip` لتمييز هدف الويب عن عنوان Nmap.
-
-## الفحص التلقائي الموسّع — 1.1
-
-الحين تدخل هدفاً واحداً، والأداة تمشي من اكتشاف الخدمات إلى فحوص الويب، ثم crawling
-للصفحات والمسارات المكتشفة، وجمع GET parameters وتشغيل SQLmap detection تلقائياً.
-تشغّل Nuclei مرة ثانية على قائمة الروابط المكتشفة. التقرير يجمع حالة التغطية،
-النتائج حسب درجة الخطورة المبلّغ عنها، الأدلة، والخطوات المقترحة للتحقق والمعالجة.
-هذا تقييم ويب غير مسجل الدخول، وليس بديلاً مكافئاً لتغطية Nessus للأنظمة والشبكات.
-
-```bash
-# اكتشاف الخدمات، crawling وفحوص الباراميترات تلقائياً
-python3 webscan.py 192.168.56.101
-
-# جميع بورتات TCP وتغطية crawling أكبر ضمن اللاب
-python3 webscan.py 192.168.56.101 --all-ports --nmap-timeout 3600 \
-  --crawl-pages 300 --crawl-depth 5 --crawl-timeout 600 \
-  --max-sqli-jobs 20 --sqli-timeout 180 --rate 3
-
-# جمع الروابط والباراميترات بدون SQLmap التلقائي
-python3 webscan.py 192.168.56.101 --no-auto-sqli
-
-# تعطيل crawling والفحوص الناتجة عنه
-python3 webscan.py 192.168.56.101 --no-crawl
-```
-
-الحدود الافتراضية: 100 طلب crawling، عمق 3، ميزانية 120 ثانية، و10 فحوص
-URL/parameter كحد أقصى، بمهلة 120 ثانية لكل فحص SQLmap. المهلة تعتمد أيضاً على
-مهل الاتصال والقراءة؛ ليست موعداً مضموناً بالثانية. أقصى الخيارات المسموحة:
-1000 طلب، عمق 10، و50 فحص SQLmap. كل فحص باراميتر له وقت مستقل، لذلك وقت التشغيل
-الإجمالي قد يطول. فحوص SQLmap التلقائية بالتتابع حتى لو اخترت parallel.
-
-Crawler يتبع روابط HTML داخل نفس host والبورت/scheme الذي استجاب في discovery فقط.
-لا يتبع redirects ولا يشغّل JavaScript. يحتفظ بجسم الاستجابة حتى 256 KiB،
-headers، status، URL وSHA-256؛ ويكتب حدود العمق والوقت والطلبات والأخطاء.
-يجمع بحد أقصى عشرة أضعاف عدد الطلبات من الروابط، ويزور ثلاث قيم مختلفة كحد أقصى
-لنفس المسار ومجموعة أسماء الباراميترات لتقليل دوائر crawling.
-
-GET forms البسيطة تُسجل بقيم input الموجودة (أو الفارغة)، بدون إرسالها أثناء crawling؛
-قد تُستخدم لاحقاً في فحوص SQLmap وNuclei. POST forms وحقول password/file وselect/textarea
-تُترك للمراجعة اليدوية. الروابط التي تبدو كعمليات logout/delete/reset/شراء
-تُستبعد آلياً كاحتياط تقريبي؛ هذا لا يضمن أن كل GET خالٍ من الآثار الجانبية.
-الباراميترات الحساسة أو المكررة والنتائج التي تجاوزت الحد تسجل بأسباب استبعادها.
-يختار URL واحداً لكل origin/path/مجموعة أسماء باراميترات واسم باراميتر، ولا يفحص
-كل قيمة مكررة. اكتشاف باراميتر يعني أنه مرشح للفحص، وليس أنه قابل للحقن فعلاً.
-
-SQLmap يستخدم level 1 / risk 1 وBEU detection، بدون database dump أو OS shell.
-يحفظ الطلبات والاستجابات في `traffic.log` مع console وsession. راجع
-[SQLmap usage](https://github.com/sqlmapproject/sqlmap/wiki/Usage).
-Nuclei يستخدم قوالب HTTP المحلية الموسومة tech/misconfig/exposure/cve مع استثناء
-dos/fuzz/bruteforce/intrusive/headless/code؛ وجود CVE ضمن القوالب لا يعني فحص جميع CVEs.
-راجع [Nuclei documentation](https://docs.projectdiscovery.io/opensource/nuclei/running).
-فحوص headers السلبية تسجل غياب CSP وX-Content-Type-Options، وHSTS على HTTPS،
-كملاحظات منخفضة الخطورة تحتاج تحقق وليست إثبات استغلال.
-
-الملفات الجديدة: `crawl/crawl.json`، `crawl/urls.txt`، `crawl/body-*.bin`،
-`discovered/web-01/nuclei/` و`auto-sqli/<number>/`.
-`summary.json` يضيف `crawl` و`injection` و`coverage`. `--dry-run` لا يجمع روابط
-فعلية؛ يظهر مراحل الاكتشاف كخطط، لذلك لا يخترع أوامر فحص لباراميترات لم يكتشفها.
-Exit code 2 يشمل أيضاً حدود crawling، أخطاءه، الاستجابات المقتطعة، والباراميترات
-المستبعدة من SQLmap. هذه فجوات تغطية، لا إعلان بأن الهدف آمن أو مصاب.
-
-## Unified findings report (updated)
-
-`report.html` now includes deduplicated observations and parsing/manual-review gaps.
-`summary.json` contains `report_schema_version: 3`, `findings`, `finding_groups`, and `parse_issues`.
-Every finding has `validation_status: needs_validation`; severity is the scanner's
-label, not an independently assessed severity or CVSS score. HTTP endpoints and
-technology observations are not automatically vulnerabilities.
-
-Supported adapters: FFUF JSON, Gobuster text, Feroxbuster response JSONL,
-Dirsearch flat `results` JSON (0.4.3 format), WhatWeb JSON, HTTPx JSONL,
-Nikto JSON (single host or host array), Nuclei JSONL, and SQLmap console GET
-Type/Title/Payload blocks, plus built-in crawling and passive header checks.
-Nmap XML remains in the open-services table.
-SQLmap session files still require manual review. Other versions may produce
-different formats; unsupported/malformed records are shown in `parse_issues`.
-
-Deduplication merges identical HTTP endpoints/statuses across directory scanners.
-Distinct vulnerability checks, matcher names, HTTP methods (Nikto), queries,
-paths, schemes, ports and status codes stay separate. Explicit default ports
-normalize to the same URL. Cross-scanner vulnerability matches are deliberately
-kept separate because similarity alone does not establish equivalence.
-Each finding retains all contributing records, tool/job status, source file,
-record index (line number for JSONL/text), and SHA-256 of the original file.
-Raw files, commands, console logs, and SQLmap sessions remain on disk.
-Failed/timed-out jobs may contribute partial evidence. A parsing error or
-inconclusive automatic SQLmap result now contributes to exit code 2;
-adapter manual-review notes alone do not.
-Keep the entire run folder when sharing or archiving evidence. Scanner output
-can include sensitive requests/responses; the report is generated locally.
-
-Validate each candidate in your authorized lab: check the exact URL/request,
-reproduce the observed behavior, compare with a control request, and record the
-outcome separately. This release does not promote candidates to confirmed findings.
-
-## Windows: run inside Kali WSL
-
-In an Administrator PowerShell window:
+In an administrator PowerShell window, install WSL if needed:
 
 ```powershell
-wsl --install -d kali-linux
+wsl --install
 ```
 
-Restart Windows if requested, launch Kali, and finish creating your Linux user.
-See [Microsoft's WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install)
-and [Kali's WSL guide](https://www.kali.org/blog/kali-linux-modern-wsl/).
-Then inside Kali's Linux shell:
+Restart if requested, open the installed Linux distribution, then follow the
+Linux installation steps. If your extracted project is `D:\\Labs\\rqtn-tool`,
+its WSL path is `/mnt/d/Labs/rqtn-tool`:
 
 ```bash
-sudo apt update
-sudo apt install python3 nmap whatweb ffuf gobuster feroxbuster dirsearch nikto nuclei sqlmap httpx-toolkit
-nuclei -ut
-cd /mnt/d/Codex/abdulla-webscan
-python3 webscan.py --check
-python3 -m unittest discover -s tests -v
-python3 webscan.py 192.168.56.101 --dry-run --ports 80,443
-python3 webscan.py 192.168.56.101 --ports 80,443 --enum ffuf --rate 3
+cd /mnt/d/Labs/rqtn-tool
+python3 rqtn.py --check
+python3 rqtn.py http://127.0.0.1:3000 --dry-run
 ```
 
-Replace the example target with your single authorized lab IP, hostname, or URL. Ensure it is reachable
-from WSL/Kali; localhost inside WSL refers to that Linux environment. A Kali VM
-can use the same commands from the directory where you copied the project.
-If a package is unavailable, use its official installation instructions or
-`--skip`; missing tools are recorded as coverage gaps. No Python packages are needed.
-Open the resulting `results/<run>/report.html` in your Windows browser via Explorer
-at `D:\Codex\abdulla-webscan\results`. The CLI still requires Linux/Kali/WSL.
-Offline report adapter tests can also run with native Windows Python; five CLI,
-process-group, and executable-fixture tests explicitly skip there and must run
-in Linux to verify the full workflow.
+Make sure the lab is reachable from that Linux environment; VPN/network routes
+must be configured there. Native Windows can run unit tests and offline report
+rebuilding, but the scanner CLI and subprocess group termination require Linux.
 
-أداة شخصية تجمع فحوص الويب من **هدف واحد: IP أو hostname أو URL** وتكتب النتائج في تقرير HTML وJSON.
-تعمل على **Kali / Linux / WSL مع Python 3.10 أو أحدث**، بدون مكتبات Python إضافية.
-استخدم عنوان اللاب المصرّح لك تختبره.
+Reference: [Microsoft WSL installation](https://learn.microsoft.com/en-us/windows/wsl/install).
 
-## تثبيت الأدوات على Kali — مرة واحدة
+## Basic scans and protocol handling
 
 ```bash
-sudo apt update
-sudo apt install python3 nmap whatweb ffuf gobuster feroxbuster dirsearch nikto nuclei sqlmap httpx-toolkit
-nuclei -ut
+# Interactive: a bare entry becomes an HTTP URL.
+python rqtn.py
+
+# URL: only its TCP port is selected for Nmap by default.
+python rqtn.py http://127.0.0.1:3000 --profile lab --output report.html
+
+# Explicit port/path without a scheme: inferred HTTP.
+python rqtn.py --target 127.0.0.1:3000/api --output report.json
+
+# Bare IP/hostname on the command line: retain service discovery (top 1000 TCP).
+python rqtn.py 192.168.56.101
+
+# All TCP ports on one lab IP; no UDP scan.
+python rqtn.py 192.168.56.101 --all-ports --nmap-timeout 3600
+
+# Plan only: no HTTP, DNS resolution or scanner subprocesses.
+python rqtn.py http://127.0.0.1:3000 --dry-run
 ```
 
-الأداة نفسها لا تثبّت أي برنامج ولا تعمل updates تلقائياً. تحتاج اتصال إنترنت للتثبيت
-وتنزيل قوالب Nuclei فقط. هذا المشروع لا يعيد توزيع برامج الفحص أو قوالبها.
-`httpx-toolkit` هو اسم أداة ProjectDiscovery في Kali؛ مكتبة Python المسماة `httpx`
-شيء مختلف. السكربت يفحص هذا الفرق ويتخطى الأداة إذا وجد النسخة الخطأ.
-لو أي package غير متوفر في مستودعك، ثبّت الأداة من مصدرها الرسمي أو استخدم `--skip`.
+Explicit HTTP/HTTPS schemes are preserved; automatic handling infers HTTP rather
+than attempting an HTTPS fallback. Lists, ranges/CIDRs and URL credentials are
+rejected. Nmap uses one resolved IP; web tools keep the hostname for Host/SNI.
+Hostname DNS is not pinned to that IP. Scope covers the exact hostname and
+responding scheme/port combinations, not subdomains or foreign hosts.
 
-فك ZIP وادخل المجلد ثم تحقق من الأدوات:
+## Enable preliminary checks
 
 ```bash
-cd abdulla-webscan
-python3 webscan.py --check
+python rqtn.py http://127.0.0.1:3000 \
+  --profile lab --crawl-redirects --builtin-sqli --sensitive-files \
+  --http-workers 4 --rate 5 --delay 0.25 --output report.html
 ```
 
-## أبسط تشغيل
+For a scan using only the built-in HTTP features:
 
 ```bash
-python3 webscan.py 192.168.56.101
+python rqtn.py http://127.0.0.1:3000 \
+  --enum none --skip nmap httpx whatweb nikto nuclei sqlmap \
+  --active-checks --builtin-sqli --sensitive-files --crawl-redirects \
+  --http-workers 4 --delay 0.25 --output report.json
 ```
 
-بدون IP سيطلبه منك:
+Time-based preliminary detection is explicit and optional:
 
 ```bash
-python3 webscan.py
+python rqtn.py http://127.0.0.1:3000 --profile lab --time-sqli --output report.json
 ```
 
-يبدأ بـ Nmap، يقرأ البورتات المفتوحة، يجرّب HTTP/HTTPS على خدمات الويب، وبعدها يشغّل:
+### crawler.py
 
-| المرحلة | العمل |
-|---|---|
-| Nmap | TCP connect + service/version detection، أول 1000 بورت شائع افتراضياً |
-| HTTP discovery | طلب GET لكل URL محتمل؛ يسجل status، title، server، والـredirect بدون اتباعه |
-| ProjectDiscovery HTTPx | معلومات HTTP وتقنيات الموقع، إذا مثبت |
-| WhatWeb | التعرف على التقنيات بمستوى aggression 1 |
-| Directory enumeration | يختار أول أداة مثبتة: FFUF ثم Gobuster ثم Feroxbuster ثم Dirsearch |
-| Nikto | فحوص الملفات والإعدادات وكشف المعلومات والتعرف على البرمجيات، tuning 123b |
-| Nuclei | قوالب HTTP المحلية tech / misconfig / exposure / cve مع exclusions محددة، وعلى الروابط المكتشفة أيضاً |
-| Crawling | روابط HTML وGET forms البسيطة ضمن خدمات نفس الـIP المستجيبة؛ أدلة وحدود تغطية |
-| SQLmap | تلقائياً على GET parameters المكتشفة ضمن الحدود، أو على URL وparameter تحددهما أنت |
-| Burp Suite | يدوي؛ افتح الموقع واختبر الـrequests والصلاحيات ومنطق التطبيق |
+The crawler uses a bounded ThreadPoolExecutor. Route parsing, deduplication and
+report writes stay in the coordinating thread; workers perform HTTP GETs.
+The Python API defaults to one worker for compatibility; CLI `--http-workers`
+defaults to four and permits at most eight.
 
-الأداة تتخطى البرنامج الناقص وتكتب السبب، وتكمل بقية الفحوص. إذا غاب Nmap أو لم يعط
-بورتات مفتوحة، تجرّب بورتات ويب شائعة؛ إن حددت `--ports` فلن تخرج هذه المحاولات عن قائمتك.
-لا يحتاج السكربت root لأن Nmap يستخدم `-sT`. لا يستخدم `-sC` أو exploitation NSE scripts.
+It extracts anchor/iframe links, external `script src`, quoted root-relative and
+relative JavaScript routes, inline-script/comment hints, and candidate script
+directories. It does not evaluate JavaScript or reconstruct dynamic URLs.
+Forms retain action, method, enctype, input controls and GET field values.
+Password control values are redacted in the inventory. POST, file/password,
+select/textarea and sensitive-token forms are inventoried for manual review,
+not automatically submitted. GET candidates preserve named submit dispatch.
 
-## بالتتابع أو مع بعض
+```python
+state = crawl(seeds, target, folder, stop, workers=4,
+              rate=5, delay=0.25, follow_redirects=True)
+```
 
-افتراضياً الفحوص بالتتابع. للتوازي بعد انتهاء Nmap وHTTP discovery:
+All requests share page/depth/time budgets, with bounded bodies (256 KiB).
+Body bytes, SHA256 and discovery `url/source/kind` are saved in `crawl/`.
+Redirects are opt-in and revalidated before fetching; foreign origins,
+action-like URLs and loops cannot expand the allowed scope.
+
+### checks.py
+
+- **Reflected XSS candidate:** compare a control with an inert custom HTML tag.
+  Literal unescaped reflection is reported; script execution and exploitability
+  are not established. No JavaScript executes.
+- **External redirect candidate:** use an `rqtn.invalid` sentinel for known
+  redirect parameters. Never connect to the destination.
+- **SQL error candidate:** `--builtin-sqli` appends a quote and looks for new
+  MySQL/PostgreSQL/SQLite/MSSQL/Oracle error signatures absent from the control.
+  Pre-existing database errors do not establish injection.
+- **Timing anomaly:** `--time-sqli` uses a one-second MySQL `SLEEP(1)` expression
+  and two fresh control/probe pairs. Checks run with one worker; pacing wait is
+  excluded from HTTP elapsed time. Stable controls and repeated differences
+  >=0.8 seconds are required. Network/server jitter may still produce false
+  positives; other DBMS dialects and injection contexts are not covered.
+- **Sensitive files:** `--sensitive-files` uses `wordlist.txt`, a random
+  nonexistent-path control per origin, and content signatures for Git HEAD,
+  environment configuration, SQL dumps, ZIP backups and PHP source backups.
+  HTTP 200 or a filename alone does not produce a finding. `--file-limit`
+  bounds URLs across origins; redirects are not followed for these probes.
+
+Checks preserve request URLs, status/headers, bodies, hashes and timing samples.
+All matches remain candidates. Limits, errors, truncation and zero-candidate
+runs are reported explicitly. SQLmap detection remains available as a separate,
+bounded external stage; no database dumping or server commands are enabled.
+
+### scope.py
+
+`scoped_link` centralizes exact-host, responding-origin and action-path checks.
+`RequestGate` reserves request start slots across threads with cancellable
+waits. Built-in stages share one gate. Start spacing is
+`max(1 / rate, delay)`, so adding workers does not multiply built-in traffic.
+The rate controls request starts, not response duration or packet bandwidth.
+
+`--delay` applies to built-in stages. External executables use their existing
+per-tool `--rate`/pause settings and individual timeout flags; parallel external
+scanners add their traffic rates. `--mode` and `--workers` control external
+jobs; `--http-workers` controls built-in requests.
+
+### session.py
+
+For an existing lab session, put one ASCII Cookie header value in `cookie.txt`,
+for example `session=VALUE; security=low` (without the `Cookie:` prefix).
 
 ```bash
-python3 webscan.py 192.168.56.101 --mode parallel --workers 2
+chmod 600 cookie.txt
+python rqtn.py http://127.0.0.1:3000 --profile lab --cookie-file cookie.txt
 ```
 
-لتشغيل أدوات المسارات الأربع بدلاً من اختيار واحدة:
+The cookie is sent only to the target URL's exact scheme/host/port and only by
+built-in requests. It is not copied to command arguments or report metadata.
+Response evidence can still contain sensitive information; keep it local.
+There is no automatic login, cookie renewal or CSRF refresh. External base
+scanners remain unauthenticated; automatic SQLmap and discovered-route Nuclei
+are deferred for cookie-enabled scans (`requires_authenticated_scanner`).
+
+### findings.py and reporting
+
+Scanner adapters preserve raw records, original file paths, record positions
+and SHA256. Deduplication keeps distinct checks, queries, statuses and origins.
+Security headers are evaluated on successful HTML responses: CSP,
+X-Content-Type-Options, HTTPS-only HSTS, and X-Frame-Options when CSP
+`frame-ancestors` is absent. Missing headers are configuration notes, not
+proof of an exploitable vulnerability.
+
+`--output results` retains the existing per-run directory layout.
+`--output report.json` or `--output report.html` exports that report and keeps
+both canonical formats plus raw evidence in a uniquely named run under
+`report.evidence/`. Exported HTML links point to that evidence directory;
+exported JSON includes `evidence_directory`. Keep the report and evidence
+directory together when transferring them.
+
+The HTML escapes untrusted content and disables scripts with a restrictive CSP.
+Rich provides colored status messages, stage progress bars and a severity table
+for Critical/High/Medium/Low groups. Use `--ui rich` or `--ui plain`; auto mode
+uses Rich only in a terminal when installed. Progress describes completed work
+against a budget, not a guarantee of complete site coverage.
 
 ```bash
-python3 webscan.py 192.168.56.101 --mode parallel --enum all
+python rqtn.py --report-only results/HOST_TIMESTAMP_ID --output rebuilt.html
 ```
 
-تشغيل الأربع يكرر كثيراً من الطلبات. غالباً أداة واحدة تكفي:
+Offline rebuilding performs no network/scanner requests and preserves the
+original scan version. Rebuilding cannot add evidence missing from the scan.
+
+## Tests and verification
 
 ```bash
-python3 webscan.py 192.168.56.101 --enum ffuf
-python3 webscan.py 192.168.56.101 --enum feroxbuster
+python -m unittest discover -s tests -v
 ```
 
-## خيارات مفيدة
+Tests use local HTTP servers and simulated scanner output, never external lab
+targets. They cover scope enforcement, TLS Host/SNI, bounded concurrency,
+shared pacing, form/JS extraction, reflection controls, SQL baseline and repeated
+timing comparisons, soft-404/file signatures, redacted session inventory,
+evidence hashes, Rich/plain output and relocated JSON/HTML evidence links.
 
-```bash
-# معاينة الأوامر؛ بدون network requests أو تشغيل البرامج
-python3 webscan.py 192.168.56.101 --dry-run --ports 80,443
+Five existing POSIX-specific tests are skipped on native Windows; run the full
+suite in Kali/Linux/WSL to verify process-group and executable CLI behavior.
+A Windows test run does not establish compatibility of installed Linux scanner
+versions. Check each tool's console log after a real lab run.
 
-# تحديد البورتات
-python3 webscan.py 192.168.56.101 --ports 80,443,3000,8080
+## Detection limits
 
-# جميع بورتات TCP؛ قد يستغرق وقتاً أطول
-python3 webscan.py 192.168.56.101 --all-ports --nmap-timeout 3600
+Rqtn Tool is an assessment aid, not a replacement for authenticated browser
+testing. It does not automatically confirm IDOR, business-logic flaws, stored/DOM
+XSS, arbitrary POST workflows or privilege escalation. Changing an object ID and
+viewing another record is evidence to investigate, not proof that the session
+has changed role. API routes requiring unusual headers/bodies and dynamically
+generated JavaScript routes may remain undiscovered. Zero findings means only
+that these checks did not establish candidates within their coverage.
 
-# موقع على بورت غير معتاد أو مسار أساسي معين
-python3 webscan.py 192.168.56.101 --url http://192.168.56.101:5001/app/
-
-# لاب بشهادة HTTPS ذاتية التوقيع
-python3 webscan.py 192.168.56.101 --insecure
-
-# قائمة مسارات أكبر محلية؛ لا تقرأ wordlist من URL
-python3 webscan.py 192.168.56.101 --wordlist /usr/share/wordlists/dirb/common.txt
-
-# تخطي أدوات
-python3 webscan.py 192.168.56.101 --skip nikto nuclei
-
-# تقليل المعدل وتحديد وقت كل أداة
-python3 webscan.py 192.168.56.101 --rate 3 --tool-timeout 300
-```
-
-القائمة المرفقة صغيرة (33 مساراً)، مناسبة لفحص بداية سريع. استبدلها بقائمة أكبر
-لتوسيع التغطية. لا توجد recursion افتراضياً في enumerators. إذا كان Nmap لا يميز
-خدمة ويب على بورت غير شائع، أدخل `--url` لذلك البورت.
-
-`--rate` هو سقف تقريبي **لكل أداة**، وليس سقفاً لجميع الطلبات. في التوازي تجتمع
-معدلات الأدوات. طلبات discovery وفحوص الخدمة في Nmap مستقلة عنه.
-`--tool-timeout` حد لكل job؛ ليس وقتاً إجمالياً للبرنامج. Ctrl+C يوقف العمليات
-التابعة ويكتب تقريراً بالنتائج المتاحة. بعض الأدوات تنهي نفسها عند حدها الداخلي
-بـexit code صفر؛ راجع logs لمعرفة إن اكتمل الفحص فعلاً.
-
-## SQLmap
-
-Crawler يبحث عن GET parameters تلقائياً. لتحديد صفحة غير مرتبطة أو باراميتر معين مثل `product.php?id=1`:
-
-```bash
-python3 webscan.py 192.168.56.101 \
-  --sqlmap-url 'http://192.168.56.101/product.php?id=1' \
-  --sqlmap-param id
-```
-
-هذا يشغّل detection على الـGET parameter المحدد بـlevel 1 / risk 1، باستخدام
-Boolean، Error، وUNION techniques. لا يستخرج قواعد البيانات أو الجداول، ولا يشغّل
-OS shell. لا يشمل POST/JSON requests أو authenticated flows في هذه النسخة.
-الـURL لازم يستعمل نفس host الهدف. SQLmap التلقائي يفحص الباراميترات المختارة ضمن الحدود، ولا يفحص كل مسار أو قيمة.
-
-## التقرير
-
-كل تشغيل يكتب مجلداً جديداً تحت `results/`:
-
-- `report.html`: افتحه بالمتصفح؛ جدول البورتات، استجابات الويب، وحالة كل فحص وروابط نتائجه.
-- `summary.json`: معلومات التشغيل والنتائج والحالات بشكل قابل للمعالجة.
-- `urls.txt`: خدمات HTTP/HTTPS التي استجابت.
-- `nmap/services.xml`: نتائج الخدمات.
-- داخل مجلد كل أداة: `command.txt` و`console.log` وملف النتائج إن أنتجته الأداة.
-
-حالات التشغيل: `completed`، `skipped`، `failed`، `timeout`، `cancelled`، `planned`، و`limited` للـcrawler.
-السكربت **لا يعتبر خروج البرنامج بنجاح إثباتاً أن الموقع آمن**. التقرير يجمع الأدلة
-والمخرجات الخام؛ النتائج المرشحة تحتاج تحقق يدوي، ولا يعيّن CVSS تلقائياً.
-Exit codes: `0` تشغيل بلا فجوات ظاهرة أو dry-run، `2` نقص تغطية/خطأ إعدادات، `130` إيقاف.
-
-## حدود النسخة
-
-- هدف واحد: IPv4 / IPv6 / hostname / HTTP(S) URL. لا يدعم IP ranges أو multi-target scans.
-- مواقع virtual hosting أو SNI تعمل عند إدخال domain/URL؛ إدخال IP وحده لا يحدد اسم الموقع.
-- لا يختبر login، IDOR، business logic أو كل XSS تلقائياً؛ استعمل Burp للخطوات اليدوية.
-- Nuclei يكتشف مجلد القوالب المحلي (legacy/XDG/Kali)؛ حدده بـ`--templates` إذا لزم.
-- قوالب Nuclei والأدوات وإصداراتها تحدد مدى التغطية. هذه ليست كل قوالب CVE ولا كل
-  فئات Nikto. يمكن أن تكتشف هذه الإعدادات كشف معلومات وإعدادات خاطئة وتقنيات فقط.
-- discovery لا يتبع redirects، والسكربت يعطلها في WhatWeb وNuclei وSQLmap، ولا يفعّل
-  اتباعها في enumerators. هذا تنظيم لأهداف الإدخال، وليس network sandbox: إعدادات
-  الأدوات المحلية وقوالبها قد تغير سلوكها، فاستعمل نسخاً وقوالباً موثوقة ضمن اللاب.
-- Nuclei OAST/update checks معطلة وقت الفحص. السكربت لا يرفع النتائج لأي خدمة.
-- التحقق من شهادة TLS يتم في discovery؛ بعض أدوات الفحص نفسها تتعامل مع TLS
-  بطريقة مختلفة. `--insecure` يسمح باكتشاف HTTPS ذات الشهادة الذاتية في اللاب.
-
-## التحقق من السكربت
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-الاختبارات تستخدم خادم HTTP محلي وبرامج scanners محاكية. تتحقق من تمرير النتائج
-وترتيب الفحوص، منع shell injection، رفض URLs خارج IP الإدخال، عدم اتباع redirect
-في discovery، dry-run، حدود التوازي، timeouts، وإنشاء التقارير. لا تثبت كفاءة scanners
-ولا تغني عن تجربة نسخها الحقيقية في Kali. أدوات الفحص الحقيقية لم تكن متوفرة في
-بيئة إنشاء هذا المشروع؛ الأوامر راجعت مراجعها الرسمية وKali.
-
-## المراجع
-
-- [Nmap XML output](https://nmap.org/book/man-output.html)
-- [ProjectDiscovery HTTPx](https://github.com/projectdiscovery/httpx)
-- [WhatWeb](https://github.com/urbanadventurer/WhatWeb)
-- [FFUF](https://github.com/ffuf/ffuf)
-- [Gobuster](https://github.com/OJ/gobuster)
-- [Feroxbuster CLI on Kali](https://www.kali.org/tools/feroxbuster/)
-- [Dirsearch CLI on Kali](https://www.kali.org/tools/dirsearch/)
-- [Nikto CLI on Kali](https://www.kali.org/tools/nikto/)
-- [Nuclei flags](https://github.com/projectdiscovery/nuclei)
-- [SQLmap usage](https://github.com/sqlmapproject/sqlmap/wiki/Usage)
+Implementation references: [Python ThreadPoolExecutor](https://docs.python.org/3/library/concurrent.futures.html#threadpoolexecutor),
+[Rich progress](https://rich.readthedocs.io/en/stable/progress.html),
+[MySQL SLEEP](https://dev.mysql.com/doc/refman/8.4/en/miscellaneous-functions.html#function_sleep).

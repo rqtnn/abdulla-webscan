@@ -1,9 +1,51 @@
-"""Single-host target parsing and URL canonicalization without network access."""
+"""Rqtn Tool single-host parsing, scope enforcement and HTTP pacing."""
 import dataclasses
 import ipaddress
 import re
 import socket
 import urllib.parse
+import threading
+import time
+import math
+
+ACTION = re.compile(r'(?:^|[/_\W])(?:logout|signout|delete|remove|destroy|reset|unsubscribe|purchase|checkout)(?:$|[/_\W])', re.I)
+
+
+def origin(url):
+    u = urllib.parse.urlsplit(url)
+    return u.scheme, u.hostname, u.port or (443 if u.scheme == 'https' else 80)
+
+
+def scoped_link(value, base, target, origins):
+    value = normalize_url(urllib.parse.urljoin(base, value.strip()), target)
+    if origin(value) not in origins:
+        raise ValueError('Port/scheme was not a responding origin')
+    if len(value) > 4096 or ACTION.search(urllib.parse.unquote(value)):
+        raise ValueError('Action-like or oversized URL excluded from automatic requests')
+    return value
+
+
+class RequestGate:
+    """One start-rate limit shared by built-in HTTP workers; cancellable waits."""
+    def __init__(self, rate=5, delay=0):
+        if not math.isfinite(rate) or not math.isfinite(delay) or rate <= 0 or delay < 0:
+            raise ValueError('Rate must be positive and delay nonnegative')
+        self.interval = max(1 / rate, delay)
+        self.next_start = 0
+        self.lock = threading.Lock()
+
+    def wait(self, stop, deadline):
+        with self.lock:
+            now = time.monotonic()
+            slot = max(now, self.next_start)
+            if slot >= deadline:
+                raise TimeoutError('HTTP stage time budget reached')
+            if stop.wait(max(0, slot - time.monotonic())) or stop.is_set():
+                raise InterruptedError('Stopped')
+            if time.monotonic() >= deadline:
+                raise TimeoutError('HTTP stage time budget reached')
+            # Do not allow queued reservations to burst after a delayed worker wakes.
+            self.next_start = time.monotonic() + self.interval
 
 
 def host(value):
@@ -59,6 +101,21 @@ def parse_target(value):
         u = urllib.parse.urlsplit(value)
         name = host(u.hostname or '')
         return Target(name, normalize_url(value, name))
+    # Keep bare IP/hostname scanning compatible; accept explicit ports/paths without a scheme.
+    try:
+        return Target(str(ipaddress.ip_address(value)))
+    except ValueError:
+        pass
+    if ':' in value or '/' in value:
+        try:
+            ipaddress.ip_network(value, strict=False)
+        except ValueError:
+            pass
+        else:
+            raise ValueError('IP ranges are not supported')
+        u = urllib.parse.urlsplit('http://' + value)
+        name = host(u.hostname or '')
+        return Target(name, normalize_url('http://' + value, name))
     # Bare IPs (including IPv6) and hostnames; URLs must include their scheme.
     return Target(host(value))
 
