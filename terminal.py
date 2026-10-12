@@ -43,6 +43,29 @@ class TerminalUI:
             task = progress.add_task(name, total=None)
             yield lambda completed, total: progress.update(task, completed=completed, total=total)
 
+    def services_table(self, services, note=''):
+        if note:
+            self.message('[NMAP] ' + note)
+        if not services:
+            return
+        columns = ('PORT/STATE', 'SERVICE', 'PRODUCT / VERSION', 'DETECTION')
+        rows = [(str(s['port']) + '/tcp open', s['service'],
+                 ' '.join(str(s.get(k, '')) for k in ('product', 'version', 'extrainfo')).strip() or 'not identified',
+                 s.get('method', 'unspecified')) for s in services]
+        if not self.console:
+            self.message(' | '.join(columns))
+            for row in rows:
+                self.message(' | '.join(row))
+            return
+        from rich.table import Table
+        from rich.text import Text
+        table = Table(title='Observed open TCP ports and service versions')
+        for name in columns:
+            table.add_column(name)
+        for row in rows:
+            table.add_row(*(Text(value) for value in row))
+        self.console.print(table)
+
     def severity_table(self, counts):
         if not self.console:
             self.message('Unvalidated severity groups: ' + ', '.join(f'{name}={counts.get(name, 0)}'

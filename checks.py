@@ -192,18 +192,78 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
 
 
 def sensitive_signature(path, body):
+    """Content signatures, never a status/filename-only vulnerability claim."""
     path = urllib.parse.urlsplit(path).path.lower()
+    if re.match(rb'\s*(?:<!doctype\s+html|<html\b)', body, re.I):
+        return ''  # Login pages and HTML soft-404s can contain example configuration.
     if path.endswith('/.git/head') and re.match(rb'ref: refs/(?:heads|tags)/[^\r\n]+', body):
         return 'Exposed Git HEAD reference'
-    if path.endswith('.env') and len(re.findall(rb'(?m)^[A-Z][A-Z0-9_]{1,80}\s*=.+$', body)) >= 2:
+    if path.endswith('/.git/config') and re.search(rb'(?m)^\[core\]\s*$', body) and re.search(rb'(?m)^\s*repositoryformatversion\s*=\s*\d+', body):
+        return 'Git repository configuration exposed'
+    basename = path.rsplit('/', 1)[-1]
+    if re.fullmatch(r'\.env(?:\.(?:local|production|development|bak|old))?', basename) and len(re.findall(rb'(?m)^[A-Z][A-Z0-9_]{1,80}\s*=.+$', body)) >= 2:
+        if credential_fields(body):
+            return 'Environment configuration with secret-like values exposed'
         return 'Environment configuration content exposed'
     if path.endswith(('.sql', '.sql.bak')) and re.search(rb'CREATE TABLE|INSERT INTO|MySQL dump|PostgreSQL database dump', body, re.I):
+        if re.search(rb'INSERT\s+INTO\s+[`"\w.]+.*?VALUES\s*\(', body, re.I | re.S):
+            return 'Database backup containing row data exposed'
         return 'Database backup content exposed'
+    if path.endswith(('.sqlite', '.sqlite3', '.db', '.db.bak')) and body.startswith(b'SQLite format 3\x00'):
+        return 'SQLite database file exposed'
     if path.endswith(('.zip', '.zip.bak')) and body.startswith(b'PK\x03\x04'):
         return 'Backup archive content exposed'
-    if path.endswith(('.php.bak', '.php~', '.php.old')) and b'<?php' in body:
+    if path.endswith(('.php.bak', '.php~', '.php.old', '.php.save')) and b'<?php' in body:
+        if credential_fields(body):
+            return 'PHP source backup with secret-like values exposed'
         return 'PHP source backup content exposed'
+    if path.endswith(('.pem', '/id_rsa', '/id_ed25519')) and re.search(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----', body):
+        return 'Private key material exposed'
+    if path.endswith('/actuator/env'):
+        try:
+            document = json.loads(body)
+            sources = document.get('propertySources', [])
+            if isinstance(sources, list):
+                for source in sources:
+                    props = source.get('properties', {}) if isinstance(source, dict) else {}
+                    if not isinstance(props, dict):
+                        continue
+                    for name, detail in props.items():
+                        value = detail.get('value') if isinstance(detail, dict) else None
+                        if secret_name(name) and secret_value(value):
+                            return 'Actuator environment with unmasked secret-like values exposed'
+        except (ValueError, AttributeError, TypeError):
+            pass
     return ''
+
+
+def secret_name(name):
+    return bool(re.search(r'password|passwd|(?:^|[_.-])pass(?:$|[_.-])|secret|(?:api|access)[_.-]?key|token', name, re.I))
+
+
+def secret_value(value):
+    if not isinstance(value, str):
+        return False
+    value = value.strip()
+    quoted = re.match(r"^(['\"])(.*?)\1", value, re.S)
+    value = quoted[2] if quoted else value.split(' #', 1)[0].strip()
+    return bool(value and not re.fullmatch(r'[*.xX]+', value)
+                and value.lower() not in ('null', 'none', 'redacted', 'changeme', 'example', 'password', 'your_password')
+                and not value.startswith(('${', '<', 'YOUR_')))
+
+
+def credential_fields(body):
+    # Match env assignments, PHP variables, and define('DB_PASSWORD', '...').
+    text = body.decode('utf-8', 'replace')
+    fields = re.findall(r"(?m)(?:^|\s)\$?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*([^\r\n;]+)", text)
+    fields += re.findall(r"define\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]", text, re.I)
+    return any(secret_name(name) and secret_value(value) for name, value in fields)
+
+
+def exposure_severity(title):
+    # Potential impact only: all evidence remains needs_validation.
+    return 'high' if any(term in title for term in (
+        'secret-like', 'containing row data', 'SQLite database', 'Private key material')) else 'medium'
 
 
 def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=120,
@@ -265,7 +325,7 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
                 record['outcome'] = 'inconclusive'
             elif response['status'] == 200 and title and response['body_sha256'] != control['body_sha256']:
                 record.update(outcome='candidate', check='sensitive-file', title=title,
-                    severity='medium', parameter='')
+                    severity=exposure_severity(title), parameter='')
         except (OSError, ValueError, http.client.HTTPException) as exc:
             record['error'] = str(exc)[:500]
             if time.monotonic() >= deadline:

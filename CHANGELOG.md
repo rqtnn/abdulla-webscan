@@ -1,3 +1,21 @@
+# Rqtn Tool 2.1.0
+
+- Distinguish dry-run plans from observed Nmap results and scan failures.
+- Show open TCP ports, products, versions, extra information and detection method
+  in terminal and HTML; retain CPE, confidence and raw XML SHA256 in JSON.
+- Add --top-ports for broader URL-target discovery, --version-intensity (default
+  7) and --nmap-rate; preserve explicit all-port and single-host scope.
+- Recover complete target-host XML records from interrupted output as partial
+  evidence, with coverage gaps and exit code 2 rather than a successful empty scan.
+- Expand bounded exposure checks for env variants, Git configuration, source
+  secrets, SQL row data, SQLite files, private keys and unmasked Actuator secrets.
+- Preserve validation labels and raw evidence; suppress HTML fallback and masked
+  credential false positives. No automatic access-control or CVE confirmation.
+
+Verified locally: 96 tests, 91 passed and 5 POSIX-only tests skipped on Windows.
+New CLI integration tests use a simulated Nmap response or a dry-run and never
+scan an external target. Real Nmap/scanner execution still needs Kali/WSL testing.
+
 # Rqtn Tool 2.0.0
 
 - Rebranded CLI, ASCII banner, HTTP User-Agent, report headings and documentation.

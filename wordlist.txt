@@ -36,3 +36,14 @@ backup.sql
 database.sql
 config.php.bak
 index.php.old
+.git/config
+.env.local
+.env.production
+.env.bak
+wp-config.php.bak
+config.php.old
+database.sqlite
+database.db
+backup.db
+server.key.pem
+actuator/env

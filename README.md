@@ -1,6 +1,6 @@
 # Rqtn Tool
 
-Rqtn Tool 2.0 is a modular Python web assessment tool for one authorized lab host.
+Rqtn Tool 2.1 is a modular Python web assessment tool for one authorized lab host.
 It discovers web routes, inventories forms, runs bounded preliminary checks and
 combines external scanner output into evidence-preserving JSON/HTML reports.
 Every finding is marked `needs_validation`; a successful process exit is not
@@ -12,6 +12,7 @@ proof of complete coverage or the absence of vulnerabilities.
 rqtn-tool/
   rqtn.py          # Branded CLI entry point
   webscan.py       # CLI/orchestration; existing imports remain compatible
+  nmap_scan.py     # Single-IP service inventory, versions and XML evidence
   crawler.py       # Concurrent HTML/JavaScript discovery and form inventory
   checks.py        # Reflection, redirects, SQL error/timing and file checks
   scope.py         # Single-host normalization, origins, redirects and pacing
@@ -108,6 +109,43 @@ responding scheme/port combinations, not subdomains or foreign hosts.
 
 ## Enable preliminary checks
 
+### Open ports and service versions (2.1)
+
+`--dry-run` creates a plan only: an empty `ports` list is expected because Nmap
+never ran. Remove that flag to collect results. A URL target normally scans only
+its TCP port. To include other services on that same lab host, explicitly choose
+`--top-ports` or `--all-ports`:
+
+```bash
+# Broad TCP discovery plus web assessment on this single HTB lab IP.
+# Replace the IP with the address currently assigned to your lab instance.
+python rqtn.py http://10.129.229.96 --top-ports 1000 \
+  --profile lab --crawl-redirects --builtin-sqli --sensitive-files \
+  --rate 3 --delay 0.5 --output lab-report.html
+
+# Every TCP port; a larger Nmap time budget is appropriate.
+python rqtn.py http://10.129.229.96 --all-ports --nmap-timeout 3600 \
+  --version-intensity 7 --profile lab --crawl-redirects \
+  --builtin-sqli --sensitive-files --output all-ports.html
+```
+
+Only one of `--ports`, `--top-ports`, and `--all-ports` is accepted. Version
+intensity is configurable from 0 to 9 (default 7, light 2, exhaustive 9);
+higher intensity may identify more services but takes longer. `--nmap-rate`
+defaults to 100 packets/sec and is separate from web request pacing.
+See [Nmap service detection](https://nmap.org/book/man-version-detection.html).
+
+The CLI and HTML report show observed open TCP ports, service names, products,
+versions and extra information. JSON preserves detection method/confidence and
+CPE identifiers when Nmap supplies them. A `table` method is a port-number label,
+not a fingerprint; a blank version means unidentified, and neither a banner nor
+a CPE alone proves a CVE. XML SHA256 and scan selection/status are recorded in
+`summary.json` under `nmap`; raw evidence stays in `nmap/services.xml` and
+`nmap/console.log`. Interrupted XML can retain complete target-host records,
+clearly marked partial. A skipped/failed/planned scan and a completed scan with
+no open ports have distinct explanations. No UDP or automatic NSE exploitation
+is enabled. Real scanner behavior still needs verification in Kali/WSL.
+
 ```bash
 python rqtn.py http://127.0.0.1:3000 \
   --profile lab --crawl-redirects --builtin-sqli --sensitive-files \
@@ -172,6 +210,12 @@ action-like URLs and loops cannot expand the allowed scope.
 - **Sensitive files:** `--sensitive-files` uses `wordlist.txt`, a random
   nonexistent-path control per origin, and content signatures for Git HEAD,
   environment configuration, SQL dumps, ZIP backups and PHP source backups.
+  Version 2.1 also recognizes Git configuration, environment variants, SQLite
+  database files, private keys and Actuator JSON with unmasked secret-like
+  values. Content indicating row data or secret exposure is prioritized as a
+  high-severity candidate; schema-only dumps and generic metadata remain medium.
+  Masked/placeholding values and HTML fallback pages do not establish secret
+  exposure. Titles omit secret values; raw response evidence can contain them.
   HTTP 200 or a filename alone does not produce a finding. `--file-limit`
   bounds URLs across origins; redirects are not followed for these probes.
 

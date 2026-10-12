@@ -135,7 +135,7 @@ def resolve_one(value):
 def prepare_target(args):
     original = args.target
     target = parse_target(original)
-    explicit_ports = bool(args.ports or args.all_ports)
+    explicit_ports = bool(args.ports or args.all_ports or getattr(args, 'top_ports', None))
     args.target = target.host
     args.input_target = original
     args.input_url = target.url

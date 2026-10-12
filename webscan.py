@@ -35,8 +35,9 @@ from checks import run_checks, run_sensitive_files
 from scope import RequestGate
 from terminal import TerminalUI, BANNER
 from findings import finding_groups, sqlmap_outcome
+import nmap_scan
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
@@ -130,28 +131,8 @@ def target_input(value):
 
 
 def parse_nmap(path, target):
-    """Only accept ports attached to our IP; closed and filtered ports are excluded."""
-    found = []
-    for host in ET.parse(path).getroot().findall("host"):
-        def matches(address):
-            try:
-                return ipaddress.ip_address(address.get('addr', '')) == ipaddress.ip_address(target)
-            except ValueError:
-                return False
-        if not any(matches(a) for a in host.findall("address")):
-            continue
-        for p in host.findall("ports/port"):
-            state = p.find("state")
-            if p.get("protocol") != "tcp" or state is None or state.get("state") != "open":
-                continue
-            service = p.find("service")
-            info = dict(service.attrib) if service is not None else {}
-            port = int(p.get("portid", "0"))
-            if 1 <= port <= 65535:
-                found.append({"port": port, "service": info.get("name", "unknown"),
-                              "product": info.get("product", ""), "version": info.get("version", ""),
-                              "tunnel": info.get("tunnel", "")})
-    return sorted(found, key=lambda row: row["port"])
+    """Compatible strict parser for observed open TCP services on one target IP."""
+    return nmap_scan.read_xml(path, target)[0]
 
 
 def candidates(target, services):
@@ -583,12 +564,19 @@ def write_reports(root, summary):
         'active_checks_requests': summary.get('active_checks', {}).get('requests', 0)}
     summary['coverage']['sensitive_files_status'] = summary.get('sensitive_files', {}).get('status', 'not_run')
     summary['coverage']['sensitive_files_requests'] = summary.get('sensitive_files', {}).get('requests', 0)
+    summary['coverage']['nmap_status'] = summary.get('nmap', {}).get('status', 'legacy_inventory')
+    summary['coverage']['nmap_selection'] = summary.get('nmap', {}).get('selection', 'Not recorded by this scan version')
+    summary['coverage']['open_tcp_ports'] = len(summary.get('ports', []))
+    summary['coverage']['identified_service_versions'] = sum(bool(row.get('version')) for row in summary.get('ports', []))
     summary['report_schema_version'] = 3
     (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     esc = lambda value: html.escape(str(value), quote=True)
     port_rows = "".join("<tr>" + "".join(f"<td>{esc(p.get(k, ''))}</td>" for k in
-                                     ("port", "service", "product", "version")) + "</tr>"
+                                     ("port", "service", "product", "version", "extrainfo", "method", "cpe")) + "</tr>"
                         for p in summary["ports"])
+    nmap_note = summary.get('nmap', {}).get('note', 'Inventory from the original scanner XML; blank versions were not identified.')
+    if not port_rows:
+        port_rows = '<tr><td colspan="7">' + esc(nmap_note) + '</td></tr>'
     url_rows = "".join("<tr>" + "".join(f"<td>{esc(p.get(k, ''))}</td>" for k in
                                     ("url", "status", "title", "server", "location", "error")) + "</tr>"
                        for p in summary["probes"])
@@ -654,8 +642,9 @@ POST forms, JavaScript execution and authenticated workflows require separate re
 Distinct checks, queries, schemes, ports and HTTP statuses remain separate.</p>
 <div class="scroll"><table><tr><th>Observation</th><th>URL</th><th>Scanner severity</th><th>Validation</th><th>Evidence</th><th>Recommended review/remediation</th></tr>
 {''.join(finding_rows)}</table></div><h2>Parsing and manual review gaps</h2><ul>{issues}</ul>
-<h2>Open TCP ports</h2><div class="scroll"><table><tr><th>Port</th><th>Service</th>
-<th>Product</th><th>Version</th></tr>{port_rows}</table></div>
+<h2>Observed open TCP ports and versions</h2><p>{esc(nmap_note)}</p>
+<div class="scroll"><table><tr><th>Port (TCP, open)</th><th>Service</th>
+<th>Product</th><th>Version</th><th>Extra information</th><th>Detection method</th><th>CPE</th></tr>{port_rows}</table></div>
 <h2>HTTP discovery</h2><div class="scroll"><table><tr><th>URL</th><th>Status</th><th>Title</th>
 <th>Server</th><th>Redirect location</th><th>Probe error</th></tr>{url_rows}</table></div>
 <h2>Tasks and raw evidence</h2><div class="scroll"><table><tr><th>Task</th><th>Status</th>
@@ -681,8 +670,13 @@ def parser():
     p.add_argument('--ui', choices=('auto', 'rich', 'plain'), default='auto')
     p.add_argument('--no-banner', action='store_true')
     p.add_argument("--enum", choices=("auto", *ENUM_TOOLS, "all", "none"), default="auto")
-    p.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
-    p.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
+    port_scope = p.add_mutually_exclusive_group()
+    port_scope.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
+    port_scope.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
+    port_scope.add_argument('--top-ports', type=positive, help='Scan N most common TCP ports (1..65535), including for URL targets; default 1000 for bare hosts.')
+    p.add_argument('--version-intensity', type=int, choices=range(10), default=7,
+                   help='Nmap service probe intensity 0..9; default 7, light=2, exhaustive=9. Higher takes longer.')
+    p.add_argument('--nmap-rate', type=positive, default=100, help='Nmap maximum packet rate, <=1000; independent of web --rate.')
     p.add_argument("--url", action="append", default=[], help="Additional same-host HTTP(S) base URL, useful for unusual ports.")
     p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlist.txt")
     p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
@@ -758,8 +752,10 @@ def main(argv=None):
             args.target = target_input(entered if '://' in entered else 'http://' + entered)
         except (argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
-    if args.ports and args.all_ports:
-        p.error("Use either --ports or --all-ports.")
+    if sum(bool(v) for v in (args.ports, args.all_ports, args.top_ports)) > 1:
+        p.error('Use only one of --ports, --all-ports or --top-ports.')
+    if args.top_ports and args.top_ports > 65535 or args.nmap_rate > 1000:
+        p.error('Use top-ports <= 65535 and nmap-rate <= 1000.')
     if args.workers > 8 or args.http_workers > 8 or args.file_limit > 1000 or args.rate > 50:
         p.error("Use workers/http-workers <= 8, file-limit <= 1000 and rate <= 50.")
     if args.crawl_pages > 1000 or args.crawl_depth > 10 or args.max_sqli_jobs > 50:
@@ -820,23 +816,24 @@ def main(argv=None):
     if not args.no_banner:
         say(BANNER)
     say(f"Rqtn Tool {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
+    summary['nmap'] = dict(status='skipped', selection=nmap_scan.selection(args),
+                           note='Nmap was excluded with --skip; no observed port inventory.')
+    if args.dry_run:
+        say('[PLAN ONLY] No network requests will run. Open ports and versions will be empty.')
     try:
         if "nmap" not in args.skip:
             folder = root / "nmap"
-            cmd = ["nmap", "-sT", "-sV", "--version-light", "-Pn", "-n", "-T3", "--max-rate", "100",
-                   "--max-retries", "1", "--host-timeout", f"{args.nmap_timeout}s"]
-            if ':' in args.scan_ip:
-                cmd.append('-6')
-            cmd += ["-p", "1-65535"] if args.all_ports else (["-p", args.ports] if args.ports else ["--top-ports", "1000"])
-            cmd += ["-oX", str(folder / "services.xml"), args.scan_ip]
+            cmd = nmap_scan.command(args, folder)
+            say(f'[NMAP SCOPE] {nmap_scan.selection(args)}; version intensity {args.version_intensity}; target {args.scan_ip}')
             result = runner.execute(Job("Nmap TCP/services", "nmap", cmd, folder,
                                         args.nmap_timeout + 10, ["services.xml"]))
             summary["jobs"].append(result)
-            if not args.dry_run and (folder / "services.xml").exists():
-                try:
-                    summary["ports"] = parse_nmap(folder / "services.xml", args.scan_ip)
-                except (ET.ParseError, ValueError, OSError) as exc:
-                    summary["outcome"] = "Nmap XML incomplete/unreadable: " + str(exc)
+            try:
+                summary['ports'], details = nmap_scan.inventory(folder / 'services.xml', args.scan_ip, result['status'])
+                summary['nmap'].update(details, selection=nmap_scan.selection(args), version_intensity=args.version_intensity)
+            except (ValueError, OSError) as exc:
+                summary['nmap'].update(status='inconclusive', note='Nmap XML unreadable: ' + str(exc))
+            UI.services_table(summary['ports'], summary['nmap']['note'])
         # If Nmap is absent/failed, only try common ports within a requested port scope.
         fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
         services = summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback]
@@ -889,6 +886,7 @@ def main(argv=None):
     if not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
         return 2
     return 2 if (any(j["status"] in ("skipped", "failed", "timeout", "limited", "incomplete") for j in summary["jobs"])
+                 or summary.get('nmap', {}).get('status') in ('partial', 'unavailable', 'inconclusive')
                  or summary.get('injection', {}).get('excluded')
                  or summary['coverage']['parsing_gaps'] or summary['coverage']['sqli_inconclusive']
                  or any('error' in page or page.get('truncated') for page in summary.get('crawl', {}).get('pages', []))) else 0
