@@ -173,9 +173,9 @@ class CrawlerTests(unittest.TestCase):
         args = webscan.parser().parse_args(['127.0.0.1'])
         summary = dict(target='127.0.0.1', jobs=[])
 
-        def interrupted(*positional):
+        def interrupted(*positional, **options):
             folder = positional[2]
-            folder.mkdir(parents=True)
+            folder.mkdir(parents=True, exist_ok=True)
             state = positional[-1]
             state.update(pages=[{'url': self.base, 'status': 200, 'headers': []}], limits=[], status='running')
             raise KeyboardInterrupt

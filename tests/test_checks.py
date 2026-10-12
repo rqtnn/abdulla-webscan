@@ -90,7 +90,7 @@ class DifferentialTests(unittest.TestCase):
         state = self.run_checks('/redirect?redirect=/local', 'redirect')
         self.assertEqual(state['checks'][0]['check'], 'external-redirect')
         self.assertEqual(len(Handler.hits), 2)
-        self.assertIn('webscan.invalid', state['checks'][0]['payload'])
+        self.assertIn('rqtn.invalid', state['checks'][0]['payload'])
 
     def test_scope_rejection_happens_before_http(self):
         with patch.object(checks, 'fetch', side_effect=AssertionError('must not fetch')):
@@ -144,8 +144,8 @@ class DifferentialTests(unittest.TestCase):
         summary = dict(target='127.0.0.1', jobs=[])
         crawl_result = dict(status='completed', pages=[], forms=[], limits=[],
                             discovered=[self.base + '/reflect?q=lab'])
-        def fake_crawl(*positional):
-            positional[2].mkdir(parents=True)
+        def fake_crawl(*positional, **options):
+            positional[2].mkdir(parents=True, exist_ok=True)
             positional[-1].update(crawl_result)
         with patch.object(webscan, 'crawl', side_effect=fake_crawl), contextlib.redirect_stdout(io.StringIO()):
             webscan.run_discovered(args, self.root, [self.base + '/'], summary, webscan.Runner(), {})

@@ -75,9 +75,9 @@ class LabTests(unittest.TestCase):
             folder=str(crawl), outputs=['crawl.json'], status='completed', elapsed=0, note='')],
             ports=[], probes=[], created='test', mode='sequential', outcome='test')
         webscan.write_reports(self.root, summary)
-        self.assertEqual(summary['coverage']['severity_counts']['low'], 6)
-        self.assertEqual(summary['coverage']['severity_instance_counts']['low'], 9)
-        self.assertEqual(len([f for f in summary['findings'] if f['category'] == 'configuration']), 9)
+        self.assertEqual(summary['coverage']['severity_counts']['low'], 8)
+        self.assertEqual(summary['coverage']['severity_instance_counts']['low'], 12)
+        self.assertEqual(len([f for f in summary['findings'] if f['category'] == 'configuration']), 12)
         self.assertTrue(all(f['evidence'][0]['sha256'] for f in summary['findings']))
         self.assertIn('2 affected URL(s)', (self.root / 'report.html').read_text())
 
@@ -99,7 +99,7 @@ class LabTests(unittest.TestCase):
         self.assertEqual(result, 0)
         updated = json.loads((self.root / 'summary.json').read_text())
         self.assertEqual(updated['version'], '1.2.0')
-        self.assertEqual(updated['report_generator_version'], '1.3.0')
+        self.assertEqual(updated['report_generator_version'], webscan.VERSION)
         self.assertEqual(updated['report_schema_version'], 3)
 
 
