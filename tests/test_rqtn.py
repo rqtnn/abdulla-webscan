@@ -248,7 +248,7 @@ class RqtnTests(unittest.TestCase):
                 '--no-banner', '--ui', 'plain', '--output', str(target)])
         self.assertEqual(result, 0)
         document = json.loads(target.read_text())
-        self.assertEqual(document['version'], '2.0.0')
+        self.assertEqual(document['version'], webscan.VERSION)
         self.assertEqual(document['coverage']['active_checks_requests'], 3)
         self.assertTrue(any(finding['check'] == 'sql-error:id' for finding in document['findings']))
         evidence = target.parent / document['evidence_directory']

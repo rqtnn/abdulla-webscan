@@ -1,5 +1,9 @@
 # Tests
 
+Version 2.1 adds single-IP Nmap metadata/CPE parsing, partial XML recovery,
+scan selection, plan-only CLI behavior, service/version output, report escaping,
+high-impact exposure signatures and masked-value/HTML false-positive controls.
+
 Run from the project root on Kali, Linux, or WSL:
 
 ```bash
