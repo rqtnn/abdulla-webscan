@@ -68,7 +68,7 @@ class CrawlerTests(unittest.TestCase):
         self.assertNotIn('/logout', LabHandler.hits)
         self.assertNotIn('/search?q=lab', LabHandler.hits)
         self.assertNotIn('/change', LabHandler.hits)
-        self.assertTrue(any('single-IP' in e['reason'] for e in result['excluded']))
+        self.assertTrue(any('single-host' in e['reason'] for e in result['excluded']))
         self.assertTrue(any('responding origin' in e['reason'] for e in result['excluded']))
         selected, _ = crawler.select_candidates(result['discovered'], 10)
         self.assertEqual({s['parameter'] for s in selected}, {'id', 'q'})
