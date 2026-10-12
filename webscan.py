@@ -30,8 +30,10 @@ import xml.etree.ElementTree as ET
 from findings import collect
 from crawler import crawl, select_candidates, origin
 from scope import parse_target, prepare_target, normalize_url, authority
+from checks import run_checks
+from findings import finding_groups, sqlmap_outcome
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
@@ -258,6 +260,33 @@ def tool_paths(dry_run=False):
     return found
 
 
+def template_path(args):
+    """An explicit path wins; otherwise discover legacy, XDG and Kali locations."""
+    if args.templates is not None:
+        return args.templates.expanduser().resolve()
+    home = Path.home()
+    locations = [Path(os.environ['NUCLEI_TEMPLATES_DIR'])] if os.environ.get('NUCLEI_TEMPLATES_DIR') else []
+    locations += [home / 'nuclei-templates',
+                  Path(os.environ.get('XDG_DATA_HOME', str(home / '.local/share'))) / 'nuclei/nuclei-templates']
+    locations += [Path(p) / 'nuclei/nuclei-templates' for p in os.environ.get('XDG_DATA_DIRS', '/usr/local/share:/usr/share').split(os.pathsep)]
+    locations += [Path('/usr/share/nuclei-templates')]
+    return next((p.resolve() for p in locations if p.is_dir() and next(p.rglob('*.yaml'), None)),
+                (home / 'nuclei-templates').resolve())
+
+
+def apply_profile(args, argv):
+    if args.profile != 'lab':
+        return
+    defaults = {'crawl_pages': 300, 'crawl_depth': 5, 'crawl_timeout': 600,
+                'max_sqli_jobs': 20, 'sqli_timeout': 180, 'sqli_techniques': 'BEUT',
+                'checks_timeout': 180}
+    for name, value in defaults.items():
+        flag = '--' + name.replace('_', '-')
+        if not any(v == flag or v.startswith(flag + '=') for v in argv):
+            setattr(args, name, value)
+    args.active_checks = not args.no_active_checks
+
+
 def build_jobs(args, root, urls, binaries):
     jobs = []
     wordlist = str(args.wordlist.resolve())
@@ -315,25 +344,25 @@ def build_jobs(args, root, urls, binaries):
                                      "--no-color", "-q", "-o", str(f / "results.json")], ["results.json"])
         if "nikto" not in args.skip:
             add("nikto", lambda f: ["-h", url, "-Tuning", "123b", "-Pause", str(1 / args.rate),
-                                   "-timeout", "5", "-maxtime", f"{timeout}s", "-nolookup",
+                                   "-timeout", "5", "-maxtime", f"{timeout}s",
                                    "-nocheck", "-nointeractive", "-Format", "json",
                                    "-output", str(f / "results.json")], ["results.json"])
         if "nuclei" not in args.skip:
-            templates = args.templates.expanduser().resolve()
+            templates = template_path(args)
             add("nuclei", lambda f: ["-u", url, "-t", str(templates), "-type", "http",
                                     "-tags", "tech,misconfig,exposure,cve", "-etags",
                                     "dos,fuzz,bruteforce,intrusive,headless,code",
                                     "-dr", "-ni", "-duc", "-rl", rate, "-c", "2", "-bs", "1",
                                     "-timeout", "5", "-retries", "0", "-jsonl", "-silent",
                                     "-o", str(f / "results.jsonl")], ["results.jsonl"],
-                f"No local templates at {templates}; install with nuclei -ut first."
-                if not templates.is_dir() and not args.dry_run else "")
+                f'No YAML templates at {templates}; run nuclei -ut -ud "{templates}" first, or use --templates.'
+                if (not templates.is_dir() or next(templates.rglob('*.yaml'), None) is None) and not args.dry_run else "")
     return jobs
 
 
 def sqlmap_job(args, root, url, parameter, name, automatic=False):
     cmd = ['sqlmap', '-u', url, '-p', parameter, '--batch', '--level=1',
-           '--risk=1', '--threads=1', '--technique=BEU', '--ignore-redirects', '--ignore-proxy',
+           '--risk=1', '--threads=1', '--technique=' + args.sqli_techniques, '--ignore-redirects', '--ignore-proxy',
            '--delay=' + str(1 / args.rate), '--timeout=10', '--retries=1',
            '-t', str(root / 'traffic.log'),
            '--output-dir=' + str(root / 'session')]
@@ -380,6 +409,22 @@ def run_discovered(args, root, live, summary, runner, binaries):
     if runner.stop.is_set():
         summary['injection']['status'] = 'cancelled'
         return
+    if args.active_checks and not args.no_active_checks:
+        checks_folder = root / 'checks'
+        started = time.monotonic()
+        say('[CHECKS] Comparing GET controls with inert reflection and redirect probes')
+        try:
+            summary['active_checks'] = run_checks(selected, args.target, checks_folder, runner.stop,
+                args.rate, args.checks_timeout, args.insecure)
+        finally:
+            state_file = checks_folder / 'checks.json'
+            if state_file.exists():
+                state = json.loads(state_file.read_text(encoding='utf-8'))
+                summary['active_checks'] = state
+                summary['jobs'].append(dict(name='GET differential checks', tool='checks', argv=[],
+                    command='Built-in control/probe GET checks; no redirects followed', folder=str(checks_folder),
+                    outputs=['checks.json'], status=state['status'], elapsed=round(time.monotonic() - started, 2),
+                    exit_code=None, note='No-match is limited to these probes; candidates need validation.'))
     if urls and 'nuclei' not in args.skip:
         job = next(j for j in build_jobs(args, root / 'discovered', [live[0]], binaries) if j.tool == 'nuclei')
         index = job.argv.index('-u')
@@ -398,6 +443,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
         summary['jobs'].append(result)
         candidate['job'] = result['name']
         candidate['job_status'] = result['status']
+        candidate['detection_outcome'] = sqlmap_outcome(result)
         if result['status'] != 'completed':
             summary['injection']['status'] = 'incomplete'
         if runner.stop.is_set():
@@ -424,14 +470,23 @@ def write_reports(root, summary):
     summary['findings'], summary['parse_issues'] = collect(root, summary)
     ranks = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
     summary['findings'].sort(key=lambda f: (ranks.get(str(f['severity']).lower(), 5), f['url'], f['check']))
+    summary['finding_groups'] = finding_groups(summary['findings'])
     severity_counts = {s: 0 for s in ranks}
-    for f in summary['findings']:
+    for f in summary['finding_groups']:
         if f['category'] in ('scanner_match', 'configuration'):
             s = str(f['severity']).lower()
             severity_counts[s if s in ranks else 'unknown'] += 1
+    instance_counts = {s: 0 for s in ranks}
+    for f in summary['findings']:
+        if f['category'] in ('scanner_match', 'configuration'):
+            s = str(f['severity']).lower()
+            instance_counts[s if s in ranks else 'unknown'] += 1
     summary['coverage'] = {'severity_counts': severity_counts,
-        'observations': len(summary['findings']), 'parsing_gaps': len(summary['parse_issues']),
-        'job_gaps': sum(j['status'] in ('skipped', 'failed', 'timeout', 'limited', 'cancelled') for j in summary['jobs']),
+        'severity_instance_counts': instance_counts,
+        'observations': len(summary['findings']),
+        'parsing_gaps': sum(i.get('kind') != 'manual_review' for i in summary['parse_issues']),
+        'adapter_review_notes': sum(i.get('kind') == 'manual_review' for i in summary['parse_issues']),
+        'job_gaps': sum(j['status'] in ('skipped', 'failed', 'timeout', 'limited', 'cancelled', 'incomplete') for j in summary['jobs']),
         'crawl_status': summary.get('crawl', {}).get('status', 'not_run'),
         'crawl_requests': summary.get('crawl', {}).get('requests', 0),
         'discovered_urls': len(summary.get('crawl', {}).get('discovered', [])),
@@ -441,8 +496,12 @@ def write_reports(root, summary):
         'crawl_limits': summary.get('crawl', {}).get('limits', []),
         'sqli_status': summary.get('injection', {}).get('status', 'not_run'),
         'sqli_selected': len(summary.get('injection', {}).get('selected', [])),
-        'sqli_excluded': len(summary.get('injection', {}).get('excluded', []))}
-    summary['report_schema_version'] = 2
+        'sqli_excluded': len(summary.get('injection', {}).get('excluded', [])),
+        'sqli_inconclusive': sum(c.get('detection_outcome') in ('inconclusive', 'incomplete')
+            for c in summary.get('injection', {}).get('selected', [])),
+        'active_checks_status': summary.get('active_checks', {}).get('status', 'not_run'),
+        'active_checks_requests': summary.get('active_checks', {}).get('requests', 0)}
+    summary['report_schema_version'] = 3
     (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     esc = lambda value: html.escape(str(value), quote=True)
     port_rows = "".join("<tr>" + "".join(f"<td>{esc(p.get(k, ''))}</td>" for k in
@@ -473,8 +532,15 @@ def write_reports(root, summary):
     issues = ''.join(f'<li>{esc(json.dumps(issue, ensure_ascii=False))}</li>' for issue in summary['parse_issues'])
     coverage_rows = ''.join(f'<tr><th>{esc(k)}</th><td>{esc(json.dumps(v) if isinstance(v, (dict, list)) else v)}</td></tr>'
                             for k, v in summary['coverage'].items())
-    injection_rows = ''.join('<tr>' + ''.join(f'<td>{esc(c.get(k, ""))}</td>' for k in ('url', 'parameter', 'job_status', 'reason')) + '</tr>'
+    injection_rows = ''.join('<tr>' + ''.join(f'<td>{esc(c.get(k, ""))}</td>' for k in ('url', 'parameter', 'job_status', 'detection_outcome', 'reason')) + '</tr>'
                               for c in summary.get('injection', {}).get('selected', []) + summary.get('injection', {}).get('excluded', []))
+    grouped_rows = ''.join('<tr><td>' + esc(g['title']) + '</td><td>' + esc(g['severity']) +
+        '</td><td>needs_validation</td><td><details><summary>' + str(len(g['urls'])) +
+        ' affected URL(s)</summary>' + '<br>'.join(esc(u) for u in g['urls']) + '</details></td></tr>'
+        for g in summary['finding_groups'] if g['category'] in ('scanner_match', 'configuration'))
+    forms_rows = ''.join('<tr>' + ''.join(f'<td>{esc(f.get(k, ""))}</td>'
+        for k in ('source', 'method', 'action', 'reason')) + '</tr>'
+        for f in summary.get('crawl', {}).get('forms', []) if f.get('reason'))
     report = f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
@@ -493,12 +559,15 @@ not a validated penetration testing report. Each active web job uses its own rat
 parallel mode adds those rates. HTTP errors and redirects are recorded as responses.
 Redirect destinations are displayed for review.</div>
 <h2>Assessment coverage</h2><p>Unauthenticated web assessment of one host. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
-HTTP uses the target hostname for Host headers, TLS SNI and certificate verification. Severity counts describe unvalidated scanner/configuration matches;
+HTTP uses the target hostname for Host headers, TLS SNI and certificate verification. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
+<h2>Grouped assessment findings</h2><p>Repeated header notes are grouped; individual URLs and raw evidence remain below.</p>
+<div class="scroll"><table><tr><th>Observation</th><th>Severity</th><th>Validation</th><th>Affected URLs</th></tr>{grouped_rows}</table></div>
 <h2>Discovered GET parameter checks</h2><p>Candidates are not proof of injection. Checks use SQLmap detection only.
 POST forms, JavaScript execution and authenticated workflows require separate review.</p>
-<div class="scroll"><table><tr><th>URL</th><th>Parameter</th><th>Job status</th><th>Selection/review reason</th></tr>{injection_rows}</table></div>
+<div class="scroll"><table><tr><th>URL</th><th>Parameter</th><th>Job status</th><th>Detection outcome</th><th>Selection/review reason</th></tr>{injection_rows}</table></div>
+<h2>Deferred forms</h2><div class="scroll"><table><tr><th>Source</th><th>Method</th><th>Action</th><th>Review reason</th></tr>{forms_rows}</table></div>
 <h2>Unified findings ({len(summary['findings'])})</h2><p>Severity is scanner-reported; every observation needs validation.
 Distinct checks, queries, schemes, ports and HTTP statuses remain separate.</p>
 <div class="scroll"><table><tr><th>Observation</th><th>URL</th><th>Scanner severity</th><th>Validation</th><th>Evidence</th><th>Recommended review/remediation</th></tr>
@@ -520,13 +589,16 @@ def parser():
     p = argparse.ArgumentParser(description="Abdulla WebScan: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
+    p.add_argument('--profile', choices=('standard', 'lab'), default='standard',
+                   help='lab: larger crawl budgets, BEUT SQLi detection and bounded differential GET checks.')
+    p.add_argument('--report-only', type=Path, help='Rebuild reports from an existing run directory; no network/scanners.')
     p.add_argument("--workers", type=positive, default=2, help="Concurrent web tools, default 2.")
     p.add_argument("--enum", choices=("auto", *ENUM_TOOLS, "all", "none"), default="auto")
     p.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
     p.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
     p.add_argument("--url", action="append", default=[], help="Additional same-host HTTP(S) base URL, useful for unusual ports.")
     p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlist.txt")
-    p.add_argument("--templates", type=Path, default=Path.home() / "nuclei-templates")
+    p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
     p.add_argument("--rate", type=positive, default=5, help="Approximate web requests/sec per tool, not global.")
     p.add_argument("--tool-timeout", type=positive, default=600, help="Seconds per external web job.")
     p.add_argument("--nmap-timeout", type=positive, default=900, help="Seconds for Nmap.")
@@ -543,6 +615,10 @@ def parser():
     p.add_argument('--no-auto-sqli', action='store_true', help='Inventory GET parameters without automatic SQLmap checks.')
     p.add_argument('--max-sqli-jobs', type=positive, default=10, help='Maximum discovered URL/parameter checks, default 10.')
     p.add_argument('--sqli-timeout', type=positive, default=120, help='Seconds per automatic SQLmap job, default 120.')
+    p.add_argument('--sqli-techniques', choices=('BEU', 'BEUT'), default='BEU', help='BEUT also includes time-based blind detection.')
+    p.add_argument('--active-checks', action='store_true', help='Bounded inert HTML reflection and external redirect GET probes.')
+    p.add_argument('--no-active-checks', action='store_true', help='Disable differential checks, including in lab profile.')
+    p.add_argument('--checks-timeout', type=positive, default=120, help='Time budget for differential checks.')
     p.add_argument("--output", type=Path, default=Path("results"), help="Parent folder; every run gets a new directory.")
     p.add_argument("--version", action="version", version=VERSION)
     return p
@@ -550,12 +626,31 @@ def parser():
 
 def main(argv=None):
     p = parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
     args = p.parse_args(argv)
+    apply_profile(args, argv)
+    if args.report_only:
+        root = args.report_only.expanduser().resolve()
+        try:
+            summary = json.loads((root / 'summary.json').read_text(encoding='utf-8'))
+            for candidate in summary.get('injection', {}).get('selected', []):
+                job = next((j for j in summary['jobs'] if j['name'] == candidate.get('job')), None)
+                if job:
+                    candidate['detection_outcome'] = sqlmap_outcome(job)
+            summary['report_generator_version'] = VERSION
+            write_reports(root, summary)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            p.error(f'Cannot rebuild this run: {exc}')
+        say(f'Rebuilt report: {root / "report.html"}')
+        return 0
     if os.name != "posix":
         p.error("Run under Kali/Linux or WSL; native Windows is not supported.")
     if args.check:
         for name, path in tool_paths(args.dry_run).items():
             say(f"{name:12} {path or 'MISSING'}")
+        templates = template_path(args)
+        available = templates.is_dir() and next(templates.rglob('*.yaml'), None) is not None
+        say(f'Nuclei YAML: {templates} ({"found" if available else "MISSING"})')
         return 0
     if not args.target:
         try:
@@ -605,7 +700,8 @@ def main(argv=None):
     summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
                "input_url": args.input_url, "scan_ip": args.scan_ip,
                "created": dt.datetime.now(dt.timezone.utc).isoformat(),
-               "mode": args.mode, "dry_run": args.dry_run, "ports": [], "probes": [], "jobs": [],
+               "mode": args.mode, "profile": args.profile, "sqli_techniques": args.sqli_techniques,
+               "dry_run": args.dry_run, "ports": [], "probes": [], "jobs": [],
                "outcome": "Discovery started."}
     say(f"Abdulla WebScan {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
     try:
@@ -673,8 +769,9 @@ def main(argv=None):
     # Report incomplete coverage even if other scanners succeeded.
     if not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
         return 2
-    return 2 if (any(j["status"] in ("skipped", "failed", "timeout", "limited") for j in summary["jobs"])
+    return 2 if (any(j["status"] in ("skipped", "failed", "timeout", "limited", "incomplete") for j in summary["jobs"])
                  or summary.get('injection', {}).get('excluded')
+                 or summary['coverage']['parsing_gaps'] or summary['coverage']['sqli_inconclusive']
                  or any('error' in page or page.get('truncated') for page in summary.get('crawl', {}).get('pages', []))) else 0
 
 

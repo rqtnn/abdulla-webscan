@@ -7,6 +7,36 @@ from pathlib import Path
 from scope import normalize_url
 
 
+def sqlmap_outcome(job):
+    if job['status'] != 'completed':
+        return 'incomplete'
+    try:
+        text = (Path(job['folder']) / 'console.log').read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return 'inconclusive'
+    if re.search(r'^Parameter:.*\((?:GET|POST)\)', text, re.M) and re.search(
+            r'^\s+Type:.*\n\s+Title:.*\n\s+Payload:', text, re.M):
+        return 'candidate_needs_validation'
+    if re.search(r'provided value for parameter.*is empty|\[ERROR\]|does not appear to be dynamic|not dynamic|connection.*(?:failed|error)', text, re.I):
+        return 'inconclusive'
+    if 'all tested parameters do not appear to be injectable' in text.lower():
+        return 'no_match_in_tested_techniques'
+    return 'inconclusive'
+
+
+def finding_groups(findings):
+    """Group header notes per origin, retaining individual finding references."""
+    groups = {}
+    for finding in findings:
+        u = urllib.parse.urlsplit(finding['url'])
+        key = ((finding['category'], finding['check'], u.scheme, u.netloc)
+               if finding['category'] == 'configuration' else (finding['id'],))
+        group = groups.setdefault(key, {k: finding[k] for k in ('title', 'severity', 'category', 'check', 'validation_status')})
+        group.setdefault('finding_ids', []).append(finding['id'])
+        group.setdefault('urls', []).append(finding['url'])
+    return list(groups.values())
+
+
 def observations(tool, row, base, scan_ip=None):
     """Yield category, check identity, URL, title, scanner severity."""
     if not isinstance(row, dict):
@@ -41,6 +71,8 @@ def observations(tool, row, base, scan_ip=None):
         if 'status' not in row:
             return
         yield 'endpoint', str(row['status']), url, f'HTTP endpoint ({row["status"]})', 'info'
+        if row.get('phpinfo_signature'):
+            yield 'scanner_match', 'phpinfo-content', url, 'PHP configuration information exposed candidate', 'medium'
         headers = {k.lower(): v for k, v in row.get('headers', [])}
         if 200 <= row['status'] < 300 and 'html' in headers.get('content-type', '').lower():
             checks = [('content-security-policy', 'Content-Security-Policy header missing'),
@@ -54,6 +86,9 @@ def observations(tool, row, base, scan_ip=None):
         if not row.get('url'):
             raise ValueError('Missing URL')
         yield 'technology', 'httpx', url, 'HTTP metadata', 'info'
+    elif tool == 'checks':
+        if row.get('outcome') == 'candidate':
+            yield 'scanner_match', row['check'] + ':' + row['parameter'], url, row['title'], row['severity']
     elif tool == 'whatweb':
         if not row.get('target') or not isinstance(row.get('plugins'), dict):
             raise ValueError('Missing target/plugins')
@@ -87,6 +122,7 @@ def collect(root, summary):
                                 {'parameter': parameter[1], 'type': m[1].rstrip('\r'), 'title': m[2].rstrip('\r'), 'payload': m[3].rstrip('\r')})
                                for m in blocks] if parameter else []
                     issues.append({'job': job['name'], 'file': rel,
+                                   'kind': 'manual_review',
                                    'message': 'SQLmap adapter reads GET Type/Title/Payload blocks only; review console and session files for full coverage.'})
                 elif filename.endswith('.jsonl'):
                     records = [(i, line) for i, line in enumerate(content.splitlines(), 1) if line.strip()]
@@ -100,6 +136,8 @@ def collect(root, summary):
                         doc = doc['results']
                     elif tool == 'crawler':
                         doc = doc['pages']
+                    elif tool == 'checks':
+                        doc = doc['checks']
                     records = list(enumerate(doc if isinstance(doc, list) else [doc], 1))
                 for index, raw in records:
                     try:

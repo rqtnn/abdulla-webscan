@@ -1,5 +1,64 @@
 # Abdulla WebScan
 
+## وضع اللاب وتحسين التحقق — 1.3.0
+
+```bash
+python3 webscan.py --version
+python3 webscan.py --check
+# ضع قوالب Nuclei في مسار ثابت؛ هذه خطوة تجهيز وليست فحصاً للموقع
+nuclei -ut -ud "$HOME/nuclei-templates"
+python3 webscan.py 'https://pentest-ground.com:4280' --profile lab \
+  --templates "$HOME/nuclei-templates" --rate 3
+```
+
+وضع `lab` يستخدم 300 طلب crawling، عمق 5، ميزانية crawling 600 ثانية،
+و20 اختبار SQLmap كحد أقصى، 180 ثانية لكل اختبار. يضيف Time-based blind إلى
+Boolean/Error/Union (`BEUT`)، بمستوى 1 وخطورة 1 وبدون dump أو أوامر على السيرفر.
+الخيارات التي تذكرها صراحةً تتقدم على إعدادات الوضع. الفحص قد يستغرق وقتاً،
+والميزانية لا تضمن انتهاء كل أدوات الشبكة في زمن دقيق.
+
+تحسينات معالجة النماذج: يحافظ على أول زر submit مسمى لتمرير معاملات مثل
+`Submit=Submit`، لكنه لا يختبر زر الإرسال نفسه كمعامل حقن. يفضل القيم غير الفارغة
+المكتشفة؛ وعندما لا تتوفر، يبدأ `id` وأسماء المعرفات المشابهة بالقيمة `1`،
+والمعاملات الأخرى بـ`webscan`. يحفظ الرابط الأصلي والقيمة المستخدمة في التقرير.
+هذه قيم بداية عامة، وليست تأكيداً أن معالج الصفحة اشتغل. POST، upload، password،
+select/textarea ونماذج تحتاج جلسة أو CSRF مؤجلة ومذكورة في التقرير.
+
+وضع اللاب يفعّل أيضاً فحوص GET تفاضلية داخل الأداة: طلب تحكم ثم علامة HTML
+غير تنفيذية لكشف الانعكاس غير المهرب، أو وجهة `https://webscan.invalid/…` لمعامل
+تحويل معروف. لا يتبع التحويل ولا يتصل بوجهته. يحفظ جسم الاستجابتين، headers،
+الطلبين وSHA256 تحت `checks/`. انعكاس العلامة لا يثبت تنفيذ JavaScript أو XSS؛
+النتيجة مرشح يحتاج تحقق سياق. حالات الخطأ والقص تظهر غير حاسمة.
+لإيقاف هذه الفحوص استخدم `--no-active-checks`، ولتفعيلها في الوضع العادي
+استخدم `--active-checks`. حد الوقت `--checks-timeout`.
+
+يعالج 1.3 فشل Nikto مع hostname بإزالة `-nolookup`؛ هذا الخيار يرفض الأسماء.
+ويكتشف قوالب Nuclei من `--templates` الصريح، أو `NUCLEI_TEMPLATES_DIR`، أو
+`~/nuclei-templates`، أو مسارات XDG وKali. المجلد الفارغ يظل فجوة واضحة ولا يحسب
+فحصاً ناجحاً. بعض مسارات Nuclei المخصصة المحفوظة في إعداداته قد تتطلب `--templates`.
+
+التقرير schema 3 يجمع الهيدرات المتكررة لكل origin في مجموعات، مع الاحتفاظ
+بكل صفحة ودليل في `findings`. `severity_counts` تعد المجموعات و
+`severity_instance_counts` تعد الحالات الفردية. ملاحظات محدودية adapter منفصلة
+عن أخطاء قراءة البيانات. نتائج SQLmap تميز بين مرشح، لا تطابق ضمن التقنيات
+المختبرة، وغير حاسم؛ انتهاء البرنامج بخروج 0 وحده لا يثبت نجاح الكشف.
+صفحة phpinfo تُسجل كمرشح إفشاء معلومات فقط عند وجود توقيعات محتواها، وليس اسمها.
+
+لإعادة بناء تقرير سابق من أدلته بدون إرسال أي طلب:
+
+```bash
+python3 webscan.py --report-only results/pentest-ground.com_TIMESTAMP_ID
+```
+
+استخدم مسار التشغيل الفعلي مكان المثال. إعادة بناء تقرير قديم لا تصلح الطلبات
+القديمة الناقصة؛ تحتاج تشغيلًا جديدًا لتجربة إصلاح النماذج وNikto.
+فحص هذا اللاب بالكامل ما زال يحتاج نتائج تشغيل Linux والتحقق من الفجوات؛ الأداة
+لا تنفذ JavaScript ولا تغطي تلقائياً منطق الأعمال أو الدخول أو كل ثغرات DVWA.
+
+الاختبارات: `python3 -m unittest discover -s tests -v`. تشمل خادم HTTP محلياً
+للتحويل والانعكاس المهرب وغير المهرب، الأدلة والمقارنة والحدود، معالجة النماذج،
+اختيار القوالب، وتجميع التقرير. لا تفحص موقعاً خارجياً أثناء الاختبارات.
+
 ## IP أو hostname أو URL — 1.2
 
 تقبل الأداة هدفاً واحداً: IPv4، IPv6، اسم نطاق، أو رابط HTTP/HTTPS كامل.
@@ -96,7 +155,7 @@ Exit code 2 يشمل أيضاً حدود crawling، أخطاءه، الاستج�
 ## Unified findings report (updated)
 
 `report.html` now includes deduplicated observations and parsing/manual-review gaps.
-`summary.json` contains `report_schema_version: 2`, `findings`, and `parse_issues`.
+`summary.json` contains `report_schema_version: 3`, `findings`, `finding_groups`, and `parse_issues`.
 Every finding has `validation_status: needs_validation`; severity is the scanner's
 label, not an independently assessed severity or CVSS score. HTTP endpoints and
 technology observations are not automatically vulnerabilities.
@@ -117,8 +176,9 @@ kept separate because similarity alone does not establish equivalence.
 Each finding retains all contributing records, tool/job status, source file,
 record index (line number for JSONL/text), and SHA-256 of the original file.
 Raw files, commands, console logs, and SQLmap sessions remain on disk.
-Failed/timed-out jobs may contribute partial evidence. A parsing gap is visible
-in the report but does not change the existing process/coverage exit codes.
+Failed/timed-out jobs may contribute partial evidence. A parsing error or
+inconclusive automatic SQLmap result now contributes to exit code 2;
+adapter manual-review notes alone do not.
 Keep the entire run folder when sharing or archiving evidence. Scanner output
 can include sensitive requests/responses; the report is generated locally.
 
@@ -311,7 +371,7 @@ Exit codes: `0` تشغيل بلا فجوات ظاهرة أو dry-run، `2` نق�
 - هدف واحد: IPv4 / IPv6 / hostname / HTTP(S) URL. لا يدعم IP ranges أو multi-target scans.
 - مواقع virtual hosting أو SNI تعمل عند إدخال domain/URL؛ إدخال IP وحده لا يحدد اسم الموقع.
 - لا يختبر login، IDOR، business logic أو كل XSS تلقائياً؛ استعمل Burp للخطوات اليدوية.
-- Nuclei يستخدم `~/nuclei-templates`؛ غيّر المكان بـ`--templates` إذا لزم.
+- Nuclei يكتشف مجلد القوالب المحلي (legacy/XDG/Kali)؛ حدده بـ`--templates` إذا لزم.
 - قوالب Nuclei والأدوات وإصداراتها تحدد مدى التغطية. هذه ليست كل قوالب CVE ولا كل
   فئات Nikto. يمكن أن تكتشف هذه الإعدادات كشف معلومات وإعدادات خاطئة وتقنيات فقط.
 - discovery لا يتبع redirects، والسكربت يعطلها في WhatWeb وNuclei وSQLmap، ولا يفعّل
