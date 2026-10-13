@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def command(args, folder):
-    argv = ['nmap', '-sT', '-sV', '--version-intensity', str(args.version_intensity),
+    argv = ['nmap', '-sS' if getattr(args, 'nmap_scan', 'connect') == 'syn' else '-sT', '-sV', '--version-intensity', str(args.version_intensity),
             '-Pn', '-n', '-T3', '--max-rate', str(args.nmap_rate), '--max-retries', '2',
             '--host-timeout', f'{args.nmap_timeout}s']
     if ':' in args.scan_ip:

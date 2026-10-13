@@ -164,7 +164,9 @@ def prepare_target(args):
     args.target = target.host
     args.input_target = original
     args.input_url = target.url
-    args.url_only = bool(target.url and not explicit_ports)
+    args.url_only = bool(getattr(args, 'url_port_only', False))
+    if args.url_only and (not target.url or explicit_ports):
+        raise ValueError('--url-port-only requires a URL and cannot be combined with another port selection')
     if args.url_only:
         u = urllib.parse.urlsplit(target.url)
         args.ports = str(u.port or (443 if u.scheme == 'https' else 80))

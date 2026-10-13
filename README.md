@@ -1,10 +1,22 @@
 # Rqtn Tool
 
-Rqtn Tool 2.2 is a modular Python web assessment tool for one authorized lab host.
+Rqtn Tool 2.2.1 is a modular Python web assessment tool for one authorized lab host.
 It discovers web routes, inventories forms, runs bounded preliminary checks and
 combines external scanner output into evidence-preserving JSON/HTML reports.
 Every finding is marked `needs_validation`; a successful process exit is not
 proof of complete coverage or the absence of vulnerabilities.
+
+## URL scan behavior in 2.2.1
+
+Entering an HTTPS URL now selects Nmap's top 1000 TCP ports instead of only 443.
+`--url-port-only` preserves the old single-port behavior explicitly. The scanner
+still targets one pinned IP. `--nmap-scan syn` uses `-sS` when raw-socket privileges
+are available; the default connect scan uses `-sT`. Detected HTTP services on
+other ports feed web discovery. A failed HTTP/TLS probe now prints its error and
+an explicit coverage explanation instead of looking like an unexplained stop.
+If Nmap is skipped or produces no port inventory, the explicit URL is probed
+without guessing other ports. Version detection (`-sV`) may take longer than a
+plain `nmap -sS`; no identical-port-count guarantee is made across methods.
 
 ## Safe defaults in 2.2
 
@@ -122,7 +134,7 @@ Reference: [Microsoft WSL installation](https://learn.microsoft.com/en-us/window
 # Interactive: a bare entry becomes an HTTP URL.
 python rqtn.py
 
-# URL: only its TCP port is selected for Nmap by default.
+# URL: scan the same host's top 1000 TCP ports by default.
 python rqtn.py http://127.0.0.1:3000 --profile lab --output report.html
 
 # Explicit port/path without a scheme: inferred HTTP.
@@ -149,9 +161,9 @@ responding scheme/port combinations, not subdomains or foreign hosts.
 ### Open ports and service versions (2.1)
 
 `--dry-run` creates a plan only: an empty `ports` list is expected because Nmap
-never ran. Remove that flag to collect results. A URL target normally scans only
-its TCP port. To include other services on that same lab host, explicitly choose
-`--top-ports` or `--all-ports`:
+never ran. Remove that flag to collect results. URLs and bare hosts now scan
+the top 1000 TCP ports by default. Use `--url-port-only` to restrict Nmap to the
+URL port, `--top-ports` for a different count, or `--all-ports` for every TCP port:
 
 ```bash
 # Broad TCP discovery plus web assessment on this single HTB lab IP.
