@@ -1,0 +1,11 @@
+{
+  "contexts": [
+    {"name": "user_a", "role": "user", "cookie_file": "user_a.cookie"},
+    {"name": "user_b", "role": "user", "cookie_file": "user_b.cookie"},
+    {"name": "admin", "role": "administrator", "cookie_file": "admin.cookie"}
+  ],
+  "policies": [
+    {"url": "/api/accounts/1", "allow": ["user_a", "admin"]},
+    {"url": "/api/admin/users", "allow": ["admin"]}
+  ]
+}

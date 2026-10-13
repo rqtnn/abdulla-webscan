@@ -1,9 +1,9 @@
-"""Rqtn Tool terminal presentation; Rich is optional."""
+"""WS-R terminal presentation; Rich is optional."""
 from contextlib import contextmanager
 import sys
 import time
 
-BANNER = 'RQTN TOOL'
+BANNER = 'WS-R'
 
 
 class TerminalUI:

@@ -1,4 +1,4 @@
-"""Rqtn Tool Nmap planning and evidence-aware single-IP service inventory."""
+"""WS-R Nmap planning and evidence-aware single-IP service inventory."""
 import hashlib
 import ipaddress
 import xml.etree.ElementTree as ET

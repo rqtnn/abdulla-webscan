@@ -1,4 +1,4 @@
-"""Rqtn Tool offline adapters. Matches are observations requiring validation."""
+"""WS-R offline adapters. Matches are observations requiring validation."""
 import hashlib
 import json
 import re
@@ -103,7 +103,7 @@ def collect(root, summary):
         if job['status'] in ('planned', 'skipped'):
             continue
         tool = job['tool']
-        if tool in ('nmap', 'network'):
+        if tool in ('nmap', 'network', 'advanced'):
             continue  # Already parsed into the services table.
         base = next((v for v in job.get('argv', []) if v.startswith(('http://', 'https://'))), '')
         for filename in (['console.log'] if tool == 'sqlmap' else job.get('outputs', [])):

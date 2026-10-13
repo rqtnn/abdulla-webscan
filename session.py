@@ -1,4 +1,4 @@
-"""Rqtn Tool explicit one-origin session for built-in HTTP checks only."""
+"""WS-R explicit one-origin session for built-in HTTP checks only."""
 from scope import origin
 
 
