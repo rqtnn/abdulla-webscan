@@ -272,13 +272,14 @@ class RqtnTests(unittest.TestCase):
         ui = terminal.TerminalUI('rich')
         ui.console = Console(file=output, force_terminal=False, width=90)
         ui.message('[bold]untrusted target[/bold]')
+        ui.startup(webscan.VERSION)
         with ui.stage('HTTP checks') as progress:
             progress(1, 2)
             progress(2, 2)
         ui.severity_table({'critical': 1, 'low': 2})
         self.assertIn('[bold]untrusted target[/bold]', output.getvalue())
         self.assertIn('Critical', output.getvalue())
-        self.assertIn('Rqtn Tool', output.getvalue())
+        self.assertEqual(output.getvalue().count('RQTN TOOL'), 1)
 
     def test_rich_absence_falls_back_to_plain(self):
         import builtins

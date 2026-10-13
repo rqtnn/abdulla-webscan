@@ -9,6 +9,7 @@ from unittest.mock import patch
 import nmap_scan
 import scope
 import webscan
+from cli_fixture import cli_platform
 
 
 class URLPortDiscovery(unittest.TestCase):
@@ -36,6 +37,7 @@ class URLPortDiscovery(unittest.TestCase):
                 webscan.parser().parse_args(['https://lab.invalid', '--url-port-only', *flags])
 
     def test_other_observed_web_ports_are_probed_and_tls_errors_printed(self):
+        cli_platform(self)
         with tempfile.TemporaryDirectory() as temp:
             root, output, seen = Path(temp), io.StringIO(), []
             def execute(runner, job):
