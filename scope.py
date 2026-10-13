@@ -7,6 +7,8 @@ import urllib.parse
 import threading
 import time
 import math
+import datetime as dt
+import email.utils
 
 ACTION = re.compile(r'(?:^|[/_\W])(?:logout|signout|delete|remove|destroy|reset|unsubscribe|purchase|checkout)(?:$|[/_\W])', re.I)
 
@@ -34,18 +36,41 @@ class RequestGate:
         self.next_start = 0
         self.lock = threading.Lock()
 
-    def wait(self, stop, deadline):
+    def observe(self, response):
+        """Honor Retry-After for throttled/unavailable responses across HTTP stages."""
+        if response.get('status') not in (429, 503):
+            return
+        value = response.get('retry_after', '')
+        for name, header in response.get('headers', []):
+            if name.lower() == 'retry-after':
+                value = header
+        try:
+            seconds = float(value) if str(value).isdigit() else (
+                email.utils.parsedate_to_datetime(value) - dt.datetime.now(dt.timezone.utc)).total_seconds()
+            if not math.isfinite(seconds) or seconds <= 0:
+                return
+        except (ValueError, TypeError, OverflowError):
+            return
         with self.lock:
-            now = time.monotonic()
-            slot = max(now, self.next_start)
-            if slot >= deadline:
-                raise TimeoutError('HTTP stage time budget reached')
-            if stop.wait(max(0, slot - time.monotonic())) or stop.is_set():
+            self.next_start = max(self.next_start, time.monotonic() + seconds)
+
+    def wait(self, stop, deadline):
+        while True:
+            if stop.is_set():
                 raise InterruptedError('Stopped')
-            if time.monotonic() >= deadline:
-                raise TimeoutError('HTTP stage time budget reached')
-            # Do not allow queued reservations to burst after a delayed worker wakes.
-            self.next_start = time.monotonic() + self.interval
+            with self.lock:
+                now = time.monotonic()
+                slot = max(now, self.next_start)
+                if slot >= deadline:
+                    raise TimeoutError('HTTP stage time budget reached')
+                if slot <= now:
+                    self.next_start = now + self.interval
+                    return
+                pause = slot - now
+            # Keep the lock available for Retry-After updates during a paced wait.
+            if stop.wait(pause):
+                raise InterruptedError('Stopped')
+            # Recheck both the deadline and any backoff installed during the wait.
 
 
 def host(value):

@@ -1,3 +1,14 @@
+## 2.2.0
+
+- Pin built-in HTTP to the selected numeric scan address while preserving Host/SNI.
+- Pace initial HTTP discovery with the shared request gate.
+- Omit raw bodies by default; redact secret metadata and protect run directories.
+- Exclude complete sensitive-query URLs from automatic parameter checks.
+- Inventory common API specification paths and scoped OpenAPI/Swagger GET routes.
+- Include initial responses in endpoint findings and accept grouped Dirsearch output.
+- Make external raw scanner execution explicit, serialize web jobs, and defer hostname jobs with an explanatory coverage gap.
+- Add local security regression fixtures; retain raw-evidence compatibility behind opt-in.
+
 # Rqtn Tool 2.1.0
 
 - Distinguish dry-run plans from observed Nmap results and scan failures.

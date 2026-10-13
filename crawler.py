@@ -10,10 +10,13 @@ import ssl
 import time
 import urllib.parse
 
-from scope import normalize_url, origin, scoped_link, ACTION, RequestGate
+from transport import connection
+import evidence
+
+from scope import normalize_url, origin, scoped_link, ACTION, RequestGate, resolve_one
 
 STATIC = re.compile(r'\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|pdf|zip|mp4|mp3)$', re.I)
-SECRET = re.compile(r'password|passwd|csrf|token|session|authorization|secret|nonce', re.I)
+SECRET = evidence.SECRET
 SCRIPT = re.compile(r'\.js$', re.I)
 
 
@@ -78,14 +81,10 @@ class Links(HTMLParser):
         self.hints.extend(route_literals(data)[:max(0, 2000 - len(self.hints))])
 
 
-def fetch(url, insecure=False, timeout=5, max_bytes=262144, headers=None):
+def fetch(url, insecure=False, timeout=5, max_bytes=262144, headers=None, scan_ip=None):
     """Direct GET with query intact; never follow redirects or use proxy settings."""
     u = urllib.parse.urlsplit(url)
-    if u.scheme == 'https':
-        context = ssl._create_unverified_context() if insecure else ssl.create_default_context()
-        conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=context)
-    else:
-        conn = http.client.HTTPConnection(u.hostname, u.port, timeout=timeout)
+    conn = connection(url, insecure, timeout, scan_ip)
     try:
         conn.request('GET', urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
                      headers={'User-Agent': 'Rqtn-Tool/2.0', 'Accept': 'text/html, application/javascript',
@@ -118,6 +117,8 @@ def select_candidates(urls, limit):
             reason = ''
             if counts[name] != 1:
                 reason = 'Repeated parameter name needs manual review'
+            elif any(SECRET.search(k) for k, _ in pairs):
+                reason = 'URL carries sensitive parameters; automatic checks deferred'
             elif not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or SECRET.search(name):
                 reason = 'Sensitive or unsupported parameter name'
             elif ACTION.search(urllib.parse.unquote(url)):
@@ -138,13 +139,14 @@ def select_candidates(urls, limit):
 
 
 def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=120,
-          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None):
+          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None, scan_ip=None, retain_raw=False, api_paths=False):
     if not 1 <= workers <= 8:
         raise ValueError('Crawler workers must be between 1 and 8')
-    folder.mkdir(parents=True, exist_ok=True)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     result = result if result is not None else {}
     result.update(status='running', pages=[], discovered=[], forms=[], excluded=[], limits=[], requests=0,
                   routes=[], authenticated=bool(session))
+    scan_ip = scan_ip or resolve_one(target)
     origins = {origin(normalize_url(url, target)) for url in seeds}
     queue, seen, discovered, variants = deque(), set(), set(), Counter()
     deadline = time.monotonic() + timeout
@@ -159,16 +161,20 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
         gate.wait(stop, deadline)
         remaining = deadline - time.monotonic()
         request_headers = session.headers_for(url) if session else {}
-        return (fetch(url, insecure, min(5, remaining), headers=request_headers)
-                if request_headers else fetch(url, insecure, min(5, remaining)))
+        response = (fetch(url, insecure, min(5, remaining), headers=request_headers, scan_ip=scan_ip)
+                if request_headers else fetch(url, insecure, min(5, remaining), scan_ip=scan_ip))
+        gate.observe(response)
+        return response
 
     def checkpoint():
         result['discovered'] = sorted(discovered)
-        (folder / 'crawl.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+        (folder / 'crawl.json').write_text(evidence.dumps(result), encoding='utf-8')
 
     def add(value, base, level, source, kind='link'):
         try:
             url = scoped_link(value, base, target, origins)
+            if source != 'seed' and any(SECRET.search(k) for k, _ in urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query)):
+                raise ValueError('Sensitive query parameters require manual review')
             if url in discovered:
                 return
             if len(discovered) >= max_discovered:
@@ -191,10 +197,14 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                 queue.append((url, level))
         except (ValueError, TypeError) as exc:
             if len(result['excluded']) < max_discovered:
-                result['excluded'].append({'url': str(value)[:4096], 'source': source, 'reason': str(exc)})
+                result['excluded'].append({'url': urllib.parse.urljoin(base, str(value))[:4096], 'source': source, 'reason': str(exc)})
 
     for seed in seeds:
         add(seed, seed, 0, 'seed')
+    if api_paths:
+        for seed in seeds:
+            for path in ('/api', '/api/v1', '/openapi.json', '/swagger.json', '/api-docs'):
+                add(path, seed, 1, 'api-inventory', 'api-probe')
     checkpoint()
     try:
         while (queue or scheduled) and not stop.is_set():
@@ -219,9 +229,7 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                 response = dict(future.result())
                 body = response.pop('body')
                 page.update(response)
-                page['body_file'] = f'body-{number:04d}.bin'
-                page['body_sha256'] = hashlib.sha256(body).hexdigest()
-                (folder / page['body_file']).write_bytes(body)
+                page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))
                 headers = {k.lower(): v for k, v in page['headers']}
                 if (200 <= page['status'] < 300 and 'html' in headers.get('content-type', '').lower()
                         and b'phpinfo()' in body and b'PHP Version' in body
@@ -233,6 +241,24 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                         or 'javascript' in headers.get('content-type', '').lower()):
                     for hint in route_literals(body.decode('utf-8', 'replace')):
                         add(hint, url, level + 1, url, 'javascript-literal')
+                if 200 <= page['status'] < 300 and 'json' in headers.get('content-type', '').lower():
+                    try:
+                        spec = json.loads(body)
+                        if isinstance(spec, dict) and ('openapi' in spec or 'swagger' in spec):
+                            paths = spec.get('paths', {})
+                            base_path = spec.get('basePath', '/') if 'swagger' in spec else '/'
+                            if 'openapi' in spec:
+                                servers = spec.get('servers', [])
+                                if servers and isinstance(servers[0], dict):
+                                    base_path = servers[0].get('url', '/')
+                            api_base = urllib.parse.urljoin(url, str(base_path).rstrip('/') + '/')
+                            if isinstance(paths, dict):
+                                for path, operations in list(paths.items())[:2000]:
+                                    # Inventory only GET operations without unresolved path templates.
+                                    if isinstance(operations, dict) and 'get' in operations and '{' not in path:
+                                        add(path.lstrip('/'), api_base, level + 1, url, 'openapi-get')
+                    except (ValueError, TypeError):
+                        pass
                 # No forms are submitted during discovery.
                 if 200 <= page['status'] < 300 and 'html' in headers.get('content-type', '').lower():
                     parser = Links()
@@ -294,9 +320,8 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
             try:
                 response = dict(future.result())
                 body = response.pop('body')
-                page.update(response, body_file=f'body-{number:04d}.bin',
-                            body_sha256=hashlib.sha256(body).hexdigest())
-                (folder / page['body_file']).write_bytes(body)
+                page.update(response)
+                page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))
             except (Exception, KeyboardInterrupt) as exc:
                 page['error'] = str(exc)[:500] or 'Cancelled before response'
             result['pages'].append(page)

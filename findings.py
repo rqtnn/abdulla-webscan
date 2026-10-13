@@ -127,7 +127,18 @@ def collect(root, summary):
                     if tool == 'ffuf':
                         doc = doc['results']
                     elif tool == 'dirsearch':
-                        doc = doc['results']
+                        results = doc['results']
+                        if isinstance(results, dict):
+                            doc = []
+                            for base_url, rows in results.items():
+                                if not isinstance(rows, list):
+                                    raise ValueError('Expected grouped Dirsearch result lists')
+                                for row in rows:
+                                    if not isinstance(row, dict):
+                                        raise ValueError('Expected Dirsearch endpoint object')
+                                    doc.append(dict(row, url=row.get('url') or urllib.parse.urljoin(base_url, row.get('path', ''))))
+                        else:
+                            doc = results
                     elif tool == 'crawler':
                         doc = doc['pages']
                     elif tool == 'checks':
@@ -159,9 +170,23 @@ def collect(root, summary):
                             else:
                                 entry['recommendation'] = 'Validate the scanner observation in application context before assigning risk or remediation.'
                             entry['evidence'].append({'tool': tool, 'job': job['name'], 'job_status': job['status'],
-                                'file': rel, 'record': index, 'sha256': digest, 'raw': raw})
+                                'file': rel, 'record': index, 'sha256': digest, 'raw': row if summary.get('retain_raw_evidence', True) else '[omitted]'})
                     except (ValueError, TypeError, KeyError, AttributeError) as exc:
                         issues.append({'job': job['name'], 'file': rel, 'record': index, 'message': str(exc)})
             except (OSError, ValueError, KeyError, TypeError) as exc:
                 issues.append({'job': job['name'], 'file': filename, 'message': str(exc)})
+    # A responding discovery probe is an endpoint observation even with crawl disabled.
+    for row in summary.get('probes', []):
+        if 'status' not in row:
+            continue
+        try:
+            url = normalize_url(row['url'], summary['target'])
+            key = ('endpoint', str(row['status']), url)
+            merged.setdefault(key, {'id': hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16],
+                'category': 'endpoint', 'check': str(row['status']), 'url': url,
+                'title': f'HTTP endpoint ({row["status"]})', 'severity': 'info',
+                'validation_status': 'needs_validation', 'evidence': [],
+                'recommendation': 'Review intended exposure and access controls; observed during HTTP discovery.'})
+        except (ValueError, KeyError, TypeError) as exc:
+            issues.append({'job': 'HTTP discovery', 'file': 'summary.json', 'message': str(exc)})
     return sorted(merged.values(), key=lambda x: (x['url'], x['category'], x['check'])), issues
