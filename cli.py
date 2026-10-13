@@ -574,6 +574,9 @@ def write_reports(root, summary):
     summary['findings'], summary['parse_issues'] = collect(root, summary)
     summary['findings'].extend(assessment.findings(root, summary))
     summary['findings'].extend(advanced.findings(root, summary))
+    for finding in summary['findings']:
+        if finding['category'] in ('scanner_match', 'configuration') and finding['url'].startswith(('http://', 'https://')):
+            finding.setdefault('reproduction', advanced.curl_helper(finding['url']))
     ranks = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
     summary['findings'].sort(key=lambda f: (ranks.get(str(f['severity']).lower(), 5), f['url'], f['check']))
     summary['finding_groups'] = finding_groups(summary['findings'])
@@ -1072,10 +1075,6 @@ def _main(argv=None):
             summary['jobs'].append(dict(name='Advanced GET assessment', tool='advanced', argv=[],
                 command='Bounded scoped GET comparisons', folder=str(folder), outputs=['results.json'],
                 status=summary['advanced']['status'], elapsed=0, note='Candidates require validation'))
-            if args.show_helpers:
-                for finding in summary['advanced']['checks']:
-                    if finding.get('curl'):
-                        say(finding['curl'])
         if args.sqlmap_url and "sqlmap" not in args.skip:
             folder = root / "sqlmap"
             summary["jobs"].append(runner.execute(sqlmap_job(args, folder, args.sqlmap_url,
@@ -1094,6 +1093,10 @@ def _main(argv=None):
             write_reports(root, summary)
             if export_path:
                 say(f'Exported report: {export_reports(root, export_path)}')
+            if args.show_helpers:
+                for finding in summary.get('findings', [])[:20]:
+                    if finding.get('reproduction'):
+                        say('[REPRODUCE] ' + finding['reproduction'])
             UI.severity_table(summary['coverage']['severity_counts'])
             UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")
