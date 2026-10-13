@@ -78,9 +78,10 @@ class ScopeTests(unittest.TestCase):
             fake_socket.makefile.return_value = io.BytesIO(wire)
             context = MagicMock()
             context.wrap_socket.return_value = fake_socket
-            with patch.object(socket, 'create_connection', return_value=fake_socket), \
+            with patch.object(socket, 'socket', return_value=fake_socket), \
                  patch.object(webscan.ssl, 'create_default_context', return_value=context):
-                result = fetch('https://lab.example:4280/app?id=1')
+                result = fetch('https://lab.example:4280/app?id=1', scan_ip='127.0.0.1')
+            fake_socket.connect.assert_called_once_with(('127.0.0.1', 4280))
             self.assertEqual(result['status'], 200)
             self.assertEqual(context.wrap_socket.call_args.kwargs['server_hostname'], 'lab.example')
             request = b''.join(c.args[0] for c in fake_socket.sendall.call_args_list)

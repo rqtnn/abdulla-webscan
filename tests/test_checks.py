@@ -105,7 +105,7 @@ class DifferentialTests(unittest.TestCase):
         self.assertEqual(state['status'], 'incomplete')
         self.assertEqual(state['requests'], 1)
         response = dict(status=200, headers=[['Content-Type', 'text/html']], body=b'x', truncated=True)
-        with patch.object(checks, 'fetch', side_effect=lambda *a: dict(response)):
+        with patch.object(checks, 'fetch', side_effect=lambda *a, **kw: dict(response)):
             state = self.run_checks('/reflect?q=lab')
         self.assertEqual(state['checks'][0]['outcome'], 'inconclusive')
         state = self.run_checks('/reflect?q=lab', timeout=0)

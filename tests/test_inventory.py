@@ -189,7 +189,7 @@ class InventoryTests(unittest.TestCase):
             return dict(status=200, headers=[], body=body, truncated=False)
         folder = self.root / 'files'
         with patch.object(checks, 'fetch', side_effect=fetch):
-            state = checks.run_sensitive_files(['http://127.0.0.1/'], '127.0.0.1', wordlist, folder, threading.Event(), rate=1000)
+            state = checks.run_sensitive_files(['http://127.0.0.1/'], '127.0.0.1', wordlist, folder, threading.Event(), rate=1000, retain_raw=True)
         row = state['checks'][0]
         self.assertEqual(row['severity'], 'high')
         self.assertNotIn('lab-secret-value', row['title'])
