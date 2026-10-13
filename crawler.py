@@ -1,6 +1,6 @@
 """Rqtn Tool bounded HTML/JavaScript discovery for responding origins."""
 from collections import Counter, deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import hashlib
 from html.parser import HTMLParser
 import http.client
@@ -230,7 +230,7 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                     try:
                         response = dict(future.result(timeout=0.25))
                         break
-                    except TimeoutError:
+                    except FutureTimeoutError:
                         if future.done():
                             response = dict(future.result())  # Propagate a request error; handle completion races.
                             break
