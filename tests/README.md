@@ -1,5 +1,19 @@
 # Tests
 
+Version 2.2 adds `test_security_regressions.py`: numeric-IP HTTP pinning with
+hostname Host/SNI, IPv6 socket selection, safe default evidence, explicit raw
+retention, rejected-URL credential/fragment redaction, whole-URL sensitive-query
+exclusion, shared discovery pacing, Retry-After cancellation/budgets, API GET
+inventory, grouped Dirsearch output, hostname-scanner deferral, and a complete
+CLI run against a local HTTP fixture with nonempty safe JSON output.
+
+Validation on 2026-10-13: Python 3.12/Linux, Rich 14.3.4 installed; all 109 tests
+passed without skips. `python -m compileall -q .` and `git diff --check` passed.
+Existing external-scanner integration tests use local executable fixtures, not
+real scanner binaries. TLS identity is verified with mock sockets; HTTP pipeline
+integration uses loopback servers. No external target was scanned. CI also tests
+Python 3.10; that interpreter was not available for the local run.
+
 Version 2.1 adds single-IP Nmap metadata/CPE parsing, partial XML recovery,
 scan selection, plan-only CLI behavior, service/version output, report escaping,
 high-impact exposure signatures and masked-value/HTML false-positive controls.

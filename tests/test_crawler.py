@@ -95,7 +95,7 @@ class CrawlerTests(unittest.TestCase):
         self.assertEqual(len(selected), 2)
         reasons = {e['reason'] for e in excluded}
         self.assertIn('Repeated parameter name needs manual review', reasons)
-        self.assertIn('Sensitive or unsupported parameter name', reasons)
+        self.assertIn('URL carries sensitive parameters; automatic checks deferred', reasons)
         self.assertIn('Action-like URL needs manual review', reasons)
         self.assertIn('Automatic SQLi job limit reached', reasons)
 
@@ -203,7 +203,7 @@ class CrawlerTests(unittest.TestCase):
         body = b'<html>phpinfo() PHP Version 8.0 Configuration</html>'
         with patch.object(crawler, 'fetch', return_value=dict(status=200,
                 headers=[['Content-Type', 'text/html']], body=body, truncated=False)):
-            result = self.run_crawl()
+            result = self.run_crawl(retain_raw=True)
         self.assertTrue(result['pages'][0]['phpinfo_signature'])
         self.assertEqual((self.root / 'crawl' / result['pages'][0]['body_file']).read_bytes(), body)
 

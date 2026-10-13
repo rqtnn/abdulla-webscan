@@ -36,8 +36,10 @@ from scope import RequestGate
 from terminal import TerminalUI, BANNER
 from findings import finding_groups, sqlmap_outcome
 import nmap_scan
+import evidence
+from transport import connection
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
@@ -147,16 +149,12 @@ def candidates(target, services):
     return list(dict.fromkeys(urls))
 
 
-def probe(url, insecure=False, timeout=5):
+def probe(url, insecure=False, timeout=5, scan_ip=None):
     """One GET, bounded response, no redirects, no environment proxies or DNS."""
     u = urllib.parse.urlsplit(url)
     conn = None
     try:
-        if u.scheme == "https":
-            context = ssl._create_unverified_context() if insecure else ssl.create_default_context()
-            conn = http.client.HTTPSConnection(u.hostname, u.port, timeout=timeout, context=context)
-        else:
-            conn = http.client.HTTPConnection(u.hostname, u.port, timeout=timeout)
+        conn = connection(url, insecure, timeout, scan_ip)
         conn.request("GET", urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
                      headers={"User-Agent": "Rqtn-Tool/" + VERSION})
         response = conn.getresponse()
@@ -164,7 +162,7 @@ def probe(url, insecure=False, timeout=5):
         title = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
         return {"url": url, "status": response.status, "server": response.getheader("Server", ""),
                 "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip() if title else "",
-                "location": response.getheader("Location", ""), "tls_verified": u.scheme == "https" and not insecure}
+                "location": response.getheader("Location", ""), "retry_after": response.getheader("Retry-After", ""), "tls_verified": u.scheme == "https" and not insecure}
     except (OSError, ssl.SSLError, http.client.HTTPException, ValueError) as exc:
         return {"url": url, "error": str(exc)[:500]}
     finally:
@@ -189,6 +187,7 @@ class Runner:
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.active = set()
+        self.web_skip_reason = ""
 
     @staticmethod
     def kill(proc):
@@ -206,7 +205,7 @@ class Runner:
 
     def execute(self, job):
         job.folder.mkdir(parents=True, exist_ok=True)
-        record = {"name": job.name, "tool": job.tool, "command": shlex.join(job.argv),
+        record = {"name": job.name, "tool": job.tool, "command": shlex.join(evidence.safe(job.argv)),
                   "argv": job.argv, "folder": str(job.folder), "status": "planned", "elapsed": 0,
                   "exit_code": None, "outputs": job.outputs, "note": ""}
         (job.folder / "command.txt").write_text(record["command"] + "\n", encoding="utf-8")
@@ -217,8 +216,9 @@ class Runner:
             record.update(status="cancelled", note="Run interrupted before starting.")
             return record
         binary = shutil.which(job.argv[0])
-        if job.skip_reason or not binary:
-            record.update(status="skipped", note=job.skip_reason or f"{job.argv[0]} is not installed/on PATH.")
+        boundary_reason = self.web_skip_reason if job.tool != "nmap" else ""
+        if job.skip_reason or boundary_reason or not binary:
+            record.update(status="skipped", note=job.skip_reason or boundary_reason or f"{job.argv[0]} is not installed/on PATH.")
             say(f"[SKIP] {job.name}: {record['note']}")
             return record
         start = time.monotonic()
@@ -395,7 +395,7 @@ def run_file_stage(args, root, live, summary, runner):
         summary['sensitive_files'] = with_progress('Checking sensitive files', run_sensitive_files,
             live, args.target, args.wordlist, files_folder, runner.stop, rate=args.rate,
             timeout=args.checks_timeout, insecure=args.insecure, session=getattr(args, 'session', None),
-            workers=args.http_workers, delay=args.delay, gate=getattr(args, 'request_gate', None), limit=args.file_limit)
+            workers=args.http_workers, delay=args.delay, gate=getattr(args, 'request_gate', None), limit=args.file_limit, scan_ip=getattr(args, 'scan_ip', None), retain_raw=getattr(args, 'retain_raw_evidence', False))
     finally:
         state_file = files_folder / 'checks.json'
         if state_file.exists():
@@ -431,7 +431,8 @@ def run_discovered(args, root, live, summary, runner, binaries):
     started = time.monotonic()
     try:
         options = {'workers': args.http_workers, 'delay': args.delay,
-                   'gate': getattr(args, 'request_gate', None)}
+                   'gate': getattr(args, 'request_gate', None), 'scan_ip': getattr(args, 'scan_ip', None),
+                   'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True}
         if args.crawl_redirects:
             options['follow_redirects'] = True
         if getattr(args, 'session', None):
@@ -442,7 +443,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
         summary['crawl']['status'] = 'cancelled'
         raise
     finally:
-        (folder / 'crawl.json').write_text(json.dumps(summary['crawl'], indent=2), encoding='utf-8')
+        (folder / 'crawl.json').write_text(evidence.dumps(summary['crawl']), encoding='utf-8')
         summary['jobs'].append({'name': 'HTML crawling and passive checks', 'tool': 'crawler',
             'argv': [], 'command': 'Built-in bounded HTTP GET crawler', 'folder': str(folder),
             'outputs': ['crawl.json'], 'status': summary['crawl']['status'],
@@ -450,7 +451,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
             'note': ', '.join(summary['crawl']['limits'])})
     urls = [url for url in summary['crawl']['discovered']
             if not urllib.parse.urlsplit(url).path.lower().endswith('.js')]
-    (folder / 'urls.txt').write_text('\n'.join(urls) + ('\n' if urls else ''), encoding='utf-8')
+    (folder / 'urls.txt').write_text('\n'.join(evidence.url(u) for u in urls) + ('\n' if urls else ''), encoding='utf-8')
     selected, excluded = select_candidates(urls, args.max_sqli_jobs)
     summary['injection'].update(selected=selected, excluded=excluded)
     if runner.stop.is_set():
@@ -461,7 +462,9 @@ def run_discovered(args, root, live, summary, runner, binaries):
         started = time.monotonic()
         say('[CHECKS] Comparing GET controls with inert reflection and redirect probes')
         try:
-            options = {'session': args.session} if getattr(args, 'session', None) else {}
+            options = {'scan_ip': getattr(args, 'scan_ip', None), 'retain_raw': getattr(args, 'retain_raw_evidence', False)}
+            if getattr(args, 'session', None):
+                options['session'] = args.session
             summary['active_checks'] = with_progress('Checking GET parameters', run_checks,
                 selected, args.target, checks_folder, runner.stop,
                 args.rate, args.checks_timeout, args.insecure, workers=args.http_workers, delay=args.delay,
@@ -569,7 +572,8 @@ def write_reports(root, summary):
     summary['coverage']['open_tcp_ports'] = len(summary.get('ports', []))
     summary['coverage']['identified_service_versions'] = sum(bool(row.get('version')) for row in summary.get('ports', []))
     summary['report_schema_version'] = 3
-    (root / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+    (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
+    summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
     port_rows = "".join("<tr>" + "".join(f"<td>{esc(p.get(k, ''))}</td>" for k in
                                      ("port", "service", "product", "version", "extrainfo", "method", "cpe")) + "</tr>"
@@ -626,10 +630,10 @@ border-bottom:1px solid #2e3e55;vertical-align:top;overflow-wrap:anywhere}}th{{c
 Completed means the process exited successfully; it does not certify the site is secure.
 Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an evidence index,
 not a validated penetration testing report. Each active web job uses its own rate cap;
-parallel mode adds those rates. HTTP errors and redirects are recorded as responses.
-Built-in HTTP workers share one start-rate gate. Redirect destinations are displayed for review.</div>
+external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
+Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
 <h2>Assessment coverage</h2><p>One-host web assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
-HTTP uses the target hostname for Host headers, TLS SNI and certificate verification. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
+Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. External scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
 <h2>Grouped assessment findings</h2><p>Repeated header notes are grouped; individual URLs and raw evidence remain below.</p>
@@ -680,6 +684,8 @@ def parser():
     p.add_argument("--url", action="append", default=[], help="Additional same-host HTTP(S) base URL, useful for unusual ports.")
     p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlist.txt")
     p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
+    p.add_argument('--retain-raw-evidence', action='store_true', help='Retain sensitive response bodies and external scanner files; protect the run directory.')
+    p.add_argument('--external-tools', action='store_true', help='Enable external web scanners for numeric IP targets; per-tool rates, independent of built-in gate. Requires --retain-raw-evidence.')
     p.add_argument("--rate", type=positive, default=5, help="Approximate web requests/sec per tool, not global.")
     p.add_argument("--tool-timeout", type=positive, default=600, help="Seconds per external web job.")
     p.add_argument("--nmap-timeout", type=positive, default=900, help="Seconds for Nmap.")
@@ -793,24 +799,36 @@ def main(argv=None):
                 raise ValueError("The SQLmap parameter must exist in the URL query string.")
     except (ValueError, OSError, argparse.ArgumentTypeError) as exc:
         p.error(str(exc))
+    if args.external_tools and not args.retain_raw_evidence:
+        p.error('--external-tools requires --retain-raw-evidence because scanners write raw responses.')
+    if not args.external_tools and not args.dry_run:
+        args.skip = list(dict.fromkeys(args.skip + [t for t in ALL_TOOLS if t != 'nmap']))
     args.wordlist = args.wordlist.expanduser()
-    if args.enum != "none" and not args.wordlist.is_file():
+    if (args.enum != "none" or args.sensitive_files) and not args.wordlist.is_file():
         p.error(f"Wordlist not found: {args.wordlist}")
     export_path = args.output if args.output.suffix.lower() in ('.json', '.html') else None
     output_parent = (args.output.parent / (args.output.stem + '.evidence')) if export_path else args.output
     root = output_parent.expanduser().resolve() / (
         re.sub(r'[^A-Za-z0-9_.-]', '_', args.target) + "_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6])
-    root.mkdir(parents=True)
+    root.mkdir(parents=True, mode=0o700)
     runner = Runner(args.dry_run)
+    try:
+        ipaddress.ip_address(args.target)
+    except ValueError:
+        runner.web_skip_reason = 'External scanner deferred: cannot guarantee DNS pinning for this hostname; built-in checks remain available.'
+    if not args.external_tools and not args.dry_run:
+        runner.web_skip_reason = 'External scanners disabled by default; use --external-tools with --retain-raw-evidence for numeric IP targets.'
     args.request_gate = RequestGate(args.rate, args.delay)
     summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
                "input_url": args.input_url, "scan_ip": args.scan_ip,
                "created": dt.datetime.now(dt.timezone.utc).isoformat(),
                "mode": args.mode, "profile": args.profile, "sqli_techniques": args.sqli_techniques,
-               "dry_run": args.dry_run, "ports": [], "probes": [], "jobs": [],
+               "dry_run": args.dry_run, "retain_raw_evidence": args.retain_raw_evidence, "ports": [], "probes": [], "jobs": [],
                "outcome": "Discovery started."}
     summary['built_in_http'] = {'workers': args.http_workers, 'delay': args.delay, 'rate': args.rate,
                                'time_checks_workers': 1 if args.time_sqli else None}
+    summary['external_scanners'] = {'enabled': args.external_tools,
+        'policy': 'Numeric IP targets only; explicit raw-evidence opt-in; serialized jobs with per-tool pacing.'}
     summary['session_scope'] = ('Built-in crawler and GET checks only; external scanners are unauthenticated; '
         'automatic SQLmap and discovered Nuclei deferred' if args.session else 'unauthenticated')
     if not args.no_banner:
@@ -849,25 +867,33 @@ def main(argv=None):
             for url in candidate_urls:
                 if runner.stop.is_set():
                     break
-                result = probe(url, args.insecure)
+                try:
+                    args.request_gate.wait(runner.stop, time.monotonic() + 6 + args.delay)
+                    result = probe(url, args.insecure, scan_ip=args.scan_ip)
+                except TimeoutError as exc:
+                    result = {'url': url, 'error': str(exc)}
+                result["fallback_candidate"] = url not in base_urls
+                args.request_gate.observe(result)
+                if not args.retain_raw_evidence:
+                    result["title"] = ""
                 summary["probes"].append(result)
                 if "status" in result:
                     live.append(url)
-                    say(f"[HTTP] {result['status']} {url} {result['title'][:80]}")
+                    say(f"[HTTP] {result['status']} {evidence.url(url)}")
                 write_reports(root, summary)
             summary["outcome"] = f"{len(live)} responding HTTP(S) base URLs."
             if not live:
                 summary["outcome"] += " No web tool jobs started; check the IP, ports, TLS or use --url."
-        (root / "urls.txt").write_text("\n".join(live) + ("\n" if live else ""), encoding="utf-8")
+        (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
         binaries = tool_paths(args.dry_run) if not runner.stop.is_set() else {}
         jobs = build_jobs(args, root, live, binaries)
-        summary["jobs"].extend(run_batch(runner, jobs, args.mode, args.workers))
+        summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
         run_discovered(args, root, live, summary, runner, binaries)
         if args.sqlmap_url and "sqlmap" not in args.skip:
             folder = root / "sqlmap"
             summary["jobs"].append(runner.execute(sqlmap_job(args, folder, args.sqlmap_url,
                                     args.sqlmap_param, 'SQLmap selected GET parameter')))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, InterruptedError):
         runner.cancel()
         summary["outcome"] = "Run interrupted; reports contain only available evidence."
     finally:
@@ -885,7 +911,11 @@ def main(argv=None):
     # Report incomplete coverage even if other scanners succeeded.
     if not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
         return 2
-    return 2 if (any(j["status"] in ("skipped", "failed", "timeout", "limited", "incomplete") for j in summary["jobs"])
+    return 2 if (any("error" in row and not (row.get('fallback_candidate') and any(
+                    'status' in other and origin(other['url'])[1:] == origin(row['url'])[1:]
+                    and origin(other['url'])[0] != origin(row['url'])[0] for other in summary['probes']))
+                    for row in summary['probes'])
+                 or any(j["status"] in ("skipped", "failed", "timeout", "limited", "incomplete") for j in summary["jobs"])
                  or summary.get('nmap', {}).get('status') in ('partial', 'unavailable', 'inconclusive')
                  or summary.get('injection', {}).get('excluded')
                  or summary['coverage']['parsing_gaps'] or summary['coverage']['sqli_inconclusive']

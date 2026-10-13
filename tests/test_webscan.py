@@ -229,7 +229,7 @@ print("TEST FIXTURE",name)
                    TEST_WEBSCAN_PORT=str(self.port))
         with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
             code = webscan.main(["127.0.0.1", "--ports", str(self.port), "--enum", "all", "--mode", "parallel",
-                                 "--templates", str(templates), "--output", str(self.root / "runs"), "--no-crawl",
+                                 "--external-tools", "--retain-raw-evidence", "--templates", str(templates), "--output", str(self.root / "runs"), "--no-crawl",
                                  "--sqlmap-url", f"http://127.0.0.1:{self.port}/?id=1", "--sqlmap-param", "id"])
         self.assertEqual(code, 0)
         data = json.loads(next((self.root / "runs").glob("*/summary.json")).read_text())
@@ -240,7 +240,7 @@ print("TEST FIXTURE",name)
         self.assertEqual(data["ports"][0]["port"], self.port)
         self.assertTrue(data['findings'])
         self.assertTrue(all(f['validation_status'] == 'needs_validation' for f in data['findings']))
-        endpoint = next(f for f in data['findings'] if f['category'] == 'endpoint')
+        endpoint = next(f for f in data['findings'] if f['category'] == 'endpoint' and f['evidence'])
         self.assertEqual(len(endpoint['evidence']), 4)
         self.assertTrue(all(i['job'] == 'SQLmap selected GET parameter' for i in data['parse_issues']))
         for job in data["jobs"]:

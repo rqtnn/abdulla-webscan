@@ -1,10 +1,45 @@
 # Rqtn Tool
 
-Rqtn Tool 2.1 is a modular Python web assessment tool for one authorized lab host.
+Rqtn Tool 2.2 is a modular Python web assessment tool for one authorized lab host.
 It discovers web routes, inventories forms, runs bounded preliminary checks and
 combines external scanner output into evidence-preserving JSON/HTML reports.
 Every finding is marked `needs_validation`; a successful process exit is not
 proof of complete coverage or the absence of vulnerabilities.
+
+## Safe defaults in 2.2
+
+Built-in HTTP resolves one IP before the run and connects to that numeric address
+through discovery, crawling and GET checks, preserving the hostname in HTTP Host,
+TLS SNI and certificate verification. Redirects remain scoped and opt-in.
+Discovery probes now share the crawler/checks request gate (`--rate`, `--delay`),
+and 429/503 Retry-After responses defer subsequent built-in requests.
+OpenAPI/Swagger documents contribute only scoped GET routes without unresolved
+path parameters. A bounded inventory tries common API specification paths.
+A responding probe appears in findings even when crawling is disabled; this is
+an endpoint observation, not a vulnerability. Grouped Dirsearch JSON is supported.
+
+Response bodies are omitted by default. Stored `body_sha256` hashes the saved
+placeholder; `response_sha256` hashes the original response used for checks.
+Secret-named query parameters, form fields and headers are redacted in metadata
+and reports. URLs carrying secret query parameters are excluded from automatic
+parameter checks. Run directories are private (0700). Previously saved evidence
+is not rewritten or cleaned automatically.
+
+`--retain-raw-evidence` explicitly retains response bodies, which may contain
+credentials and personal data. Protect those files. External web scanners require
+both `--external-tools` and `--retain-raw-evidence`, and are deferred for hostname
+targets because their DNS behavior cannot be pinned reliably across versions.
+Use built-in checks for hostname targets. Numeric-IP external web jobs run
+sequentially with per-tool pacing; their rate flags are approximate, not a global
+network guarantee. Nmap has its separate packet-rate cap. Missing/deferred jobs
+remain visible coverage gaps; exit 2 does not mean the report is empty.
+
+```bash
+# Built-in checks against an authorized local fixture, without optional scanners
+python rqtn.py http://127.0.0.1:8000 --skip nmap --no-auto-sqli
+# Explicit raw evidence and external scanners against an authorized numeric-IP lab
+python rqtn.py http://127.0.0.1:8000 --external-tools --retain-raw-evidence
+```
 
 ## Project structure
 
@@ -15,6 +50,8 @@ rqtn-tool/
   nmap_scan.py     # Single-IP service inventory, versions and XML evidence
   crawler.py       # Concurrent HTML/JavaScript discovery and form inventory
   checks.py        # Reflection, redirects, SQL error/timing and file checks
+  transport.py     # Numeric-IP connections preserving Host and TLS identity
+  evidence.py      # Safe metadata serialization and explicit raw-body retention
   scope.py         # Single-host normalization, origins, redirects and pacing
   session.py       # Explicit origin-bound Cookie file for built-in requests
   findings.py      # Scanner adapters, deduplication, headers and evidence
@@ -103,8 +140,8 @@ python rqtn.py http://127.0.0.1:3000 --dry-run
 
 Explicit HTTP/HTTPS schemes are preserved; automatic handling infers HTTP rather
 than attempting an HTTPS fallback. Lists, ranges/CIDRs and URL credentials are
-rejected. Nmap uses one resolved IP; web tools keep the hostname for Host/SNI.
-Hostname DNS is not pinned to that IP. Scope covers the exact hostname and
+rejected. Nmap and built-in HTTP use one resolved IP; HTTP retains hostname
+Host/SNI. External hostname web scanners are deferred. Scope covers the exact hostname and
 responding scheme/port combinations, not subdomains or foreign hosts.
 
 ## Enable preliminary checks
@@ -188,7 +225,9 @@ state = crawl(seeds, target, folder, stop, workers=4,
 ```
 
 All requests share page/depth/time budgets, with bounded bodies (256 KiB).
-Body bytes, SHA256 and discovery `url/source/kind` are saved in `crawl/`.
+Response hashes and redacted discovery `url/source/kind` are saved in `crawl/`.
+Body files contain placeholders unless `retain_raw=True` / `--retain-raw-evidence`
+is explicitly supplied.
 Redirects are opt-in and revalidated before fetching; foreign origins,
 action-like URLs and loops cannot expand the allowed scope.
 
@@ -219,7 +258,8 @@ action-like URLs and loops cannot expand the allowed scope.
   HTTP 200 or a filename alone does not produce a finding. `--file-limit`
   bounds URLs across origins; redirects are not followed for these probes.
 
-Checks preserve request URLs, status/headers, bodies, hashes and timing samples.
+Checks preserve redacted request URLs and status/headers, response hashes and
+timing samples; raw bodies require explicit opt-in.
 All matches remain candidates. Limits, errors, truncation and zero-candidate
 runs are reported explicitly. SQLmap detection remains available as a separate,
 bounded external stage; no database dumping or server commands are enabled.
@@ -233,9 +273,9 @@ waits. Built-in stages share one gate. Start spacing is
 The rate controls request starts, not response duration or packet bandwidth.
 
 `--delay` applies to built-in stages. External executables use their existing
-per-tool `--rate`/pause settings and individual timeout flags; parallel external
-scanners add their traffic rates. `--mode` and `--workers` control external
-jobs; `--http-workers` controls built-in requests.
+per-tool `--rate`/pause settings and individual timeout flags. External jobs are
+serialized by the CLI, including when legacy `--mode parallel` is supplied.
+`--http-workers` controls built-in requests.
 
 ### session.py
 
@@ -256,8 +296,9 @@ are deferred for cookie-enabled scans (`requires_authenticated_scanner`).
 
 ### findings.py and reporting
 
-Scanner adapters preserve raw records, original file paths, record positions
-and SHA256. Deduplication keeps distinct checks, queries, statuses and origins.
+Scanner adapters preserve original file paths, record positions and SHA256.
+Inline raw records are omitted from default CLI reports; retained metadata
+records are redacted. Deduplication keeps distinct checks, queries, statuses and origins.
 Security headers are evaluated on successful HTML responses: CSP,
 X-Content-Type-Options, HTTPS-only HSTS, and X-Frame-Options when CSP
 `frame-ancestors` is absent. Missing headers are configuration notes, not
@@ -265,7 +306,7 @@ proof of an exploitable vulnerability.
 
 `--output results` retains the existing per-run directory layout.
 `--output report.json` or `--output report.html` exports that report and keeps
-both canonical formats plus raw evidence in a uniquely named run under
+both canonical formats plus evidence in a uniquely named run under
 `report.evidence/`. Exported HTML links point to that evidence directory;
 exported JSON includes `evidence_directory`. Keep the report and evidence
 directory together when transferring them.

@@ -10,7 +10,8 @@ import re
 import threading
 
 from crawler import fetch, origin, scoped_link
-from scope import RequestGate
+from scope import RequestGate, resolve_one
+import evidence
 
 SQL_ERRORS = {
     'mysql': re.compile(rb'you have an error in your sql syntax|SQL syntax.*?MySQL|mysqli?_sql_exception', re.I),
@@ -42,12 +43,13 @@ def replace_parameter(url, name, value):
 
 
 def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=False, session=None,
-               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None):
+               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None, scan_ip=None, retain_raw=False):
     if not 1 <= workers <= 8:
         raise ValueError('Check workers must be between 1 and 8')
     if time_sqli:
         workers = 1  # Avoid creating our own concurrent timing interference.
-    folder.mkdir(parents=True, exist_ok=True)
+    scan_ip = scan_ip or resolve_one(target)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     state = {'status': 'running', 'requests': 0, 'checks': [], 'limits': []}
     deadline = time.monotonic() + timeout
     lock = threading.Lock()
@@ -55,7 +57,7 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
 
     def save():
         with lock:
-            (folder / 'checks.json').write_text(json.dumps(state, indent=2), encoding='utf-8')
+            (folder / 'checks.json').write_text(evidence.dumps(state), encoding='utf-8')
 
     def request(url, label):
         if stop.is_set():
@@ -74,14 +76,14 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
             number = state['requests']
         headers = session.headers_for(url) if session else {}
         started = time.monotonic()
-        response = (fetch(url, insecure, min(5, remaining), headers=headers)
-                    if headers else fetch(url, insecure, min(5, remaining)))
+        response = (fetch(url, insecure, min(5, remaining), headers=headers, scan_ip=scan_ip)
+                    if headers else fetch(url, insecure, min(5, remaining), scan_ip=scan_ip))
+        gate.observe(response)
         response = dict(response)
         body = response.pop('body')
         response['elapsed'] = time.monotonic() - started
         name = f'{number:04d}-{label}.bin'
-        (folder / name).write_bytes(body)
-        response.update(url=url, body_file=name, body_sha256=hashlib.sha256(body).hexdigest())
+        response.update(url=url, **evidence.save_body(folder, name, body, retain_raw))
         return response, body
 
     save()
@@ -267,12 +269,13 @@ def exposure_severity(title):
 
 
 def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=120,
-                        insecure=False, session=None, workers=1, delay=0, gate=None, limit=100, progress=None):
+                        insecure=False, session=None, workers=1, delay=0, gate=None, limit=100, progress=None, scan_ip=None, retain_raw=False):
     """Bounded GET-only inventory with per-origin soft-404 controls and content signatures."""
     from collections import deque
     if not 1 <= workers <= 8 or not 1 <= limit <= 1000:
         raise ValueError('Use workers 1..8 and file limit 1..1000')
-    folder.mkdir(parents=True, exist_ok=True)
+    scan_ip = scan_ip or resolve_one(target)
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
     state = {'status': 'running', 'requests': 0, 'checks': [], 'limits': []}
     gate = gate or RequestGate(rate, delay)
     deadline, lock = time.monotonic() + timeout, threading.Lock()
@@ -301,16 +304,16 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             number = state['requests']
         headers = session.headers_for(url) if session else {}
         remaining = min(5, deadline - time.monotonic())
-        response = fetch(url, insecure, remaining, **({'headers': headers} if headers else {}))
+        response = fetch(url, insecure, remaining, scan_ip=scan_ip, **({'headers': headers} if headers else {}))
+        gate.observe(response)
         response = dict(response)
         body = response.pop('body')
         name = f'{number:04d}-{label}.bin'
-        (folder / name).write_bytes(body)
-        response.update(url=url, body_file=name, body_sha256=hashlib.sha256(body).hexdigest())
+        response.update(url=url, **evidence.save_body(folder, name, body, retain_raw))
         return response, body
 
     def save():
-        (folder / 'checks.json').write_text(json.dumps(state, indent=2), encoding='utf-8')
+        (folder / 'checks.json').write_text(evidence.dumps(state), encoding='utf-8')
 
     def check(url):
         record = {'url': url, 'outcome': 'inconclusive', 'responses': []}
@@ -323,7 +326,7 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             record['outcome'] = 'no_match'
             if response.get('truncated') or control.get('truncated'):
                 record['outcome'] = 'inconclusive'
-            elif response['status'] == 200 and title and response['body_sha256'] != control['body_sha256']:
+            elif response['status'] == 200 and title and response['response_sha256'] != control['response_sha256']:
                 record.update(outcome='candidate', check='sensitive-file', title=title,
                     severity=exposure_severity(title), parameter='')
         except (OSError, ValueError, http.client.HTTPException) as exc:
@@ -343,6 +346,8 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
                 url = scoped_link('/rqtn-nonexistent-' + uuid.uuid4().hex, base, target, allowed)
                 response, _ = request(url, 'file-control')
                 controls[origin(base)] = response
+                state.setdefault('controls', []).append(response)
+                save()
             for path in paths:
                 try:
                     url = scoped_link(path, base, target, allowed)
