@@ -85,6 +85,7 @@ def with_progress(name, function, *positional, **options):
 
 def export_reports(root, destination):
     """Export a report while keeping the complete evidence directory."""
+    root = root.expanduser().resolve()
     destination = destination.expanduser().resolve()
     if destination.suffix.lower() not in ('.json', '.html'):
         raise ValueError('Report export requires .json or .html')

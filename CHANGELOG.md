@@ -12,6 +12,8 @@
 - Adapt mocked/loopback CLI tests for Windows without emulating POSIX processes;
   keep Unix permission checks active on Linux and make OpenSSL prerequisites explicit.
 - Run CI on Ubuntu and Windows with Python 3.10 and 3.12.
+- Normalize report source/destination paths before computing evidence links,
+  including Windows short-path aliases.
 
 Local verification: 134 tests discovered, 128 passed, 6 skipped on Windows
 (5 POSIX-only tests and the OpenSSL-dependent TLS fixture). No failing runnable
