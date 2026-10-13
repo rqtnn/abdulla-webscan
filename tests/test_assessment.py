@@ -84,6 +84,9 @@ class AssessmentTests(unittest.TestCase):
         self.assertIn('network-smb-signing', [r['check'] for r in checks])
         self.assertIn('network-ssh-legacy-algorithms', [r['check'] for r in checks])
         self.assertNotIn('network-ftp', [r['check'] for r in checks])
+        disabled = assessment.inventory_checks('127.0.0.1', [dict(port=445, service='microsoft-ds',
+            scripts=[dict(id='smb2-security-mode', output='Message signing disabled')])])
+        self.assertIn('network-smb-signing', [r['check'] for r in disabled])
 
     def test_required_signing_and_modern_ssh_are_not_weak_configuration_matches(self):
         rows = assessment.inventory_checks('127.0.0.1', [
