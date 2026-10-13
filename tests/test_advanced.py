@@ -265,3 +265,10 @@ class AdvancedTests(unittest.TestCase):
                 max_pages=1, rate=1000, api_paths=False)
         self.assertEqual(result['status'], 'incomplete')
         self.assertEqual(result['pages'][0]['error'], 'RuntimeError')
+
+    def test_builtin_check_unexpected_failure_preserves_inconclusive_evidence(self):
+        with patch.object(checks, 'fetch', side_effect=RuntimeError('private')):
+            result = checks.run_checks([{'url': self.base + '/?id=1', 'parameter': 'id'}],
+                '127.0.0.1', self.root / 'checks', self.stop, rate=1000, timeout=3)
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertEqual(result['checks'][0]['error'], 'RuntimeError')
