@@ -75,7 +75,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(nmap_scan.inventory(self.xml, '127.0.0.1', 'completed')[1]['status'], expected)
 
     def test_url_top_ports_all_ports_and_version_command_are_explicit(self):
-        for flags, expected in (([], ['-p', '4280']), (['--top-ports', '2000'], ['--top-ports', '2000']),
+        for flags, expected in (([], ['--top-ports', '1000']), (['--url-port-only'], ['-p', '4280']), (['--top-ports', '2000'], ['--top-ports', '2000']),
                                 (['--all-ports'], ['-p', '1-65535']), (['--ports', '22,4280'], ['-p', '22,4280'])):
             args = webscan.parser().parse_args(['https://lab.example:4280/', '--dry-run', *flags])
             with patch.object(scope, 'resolve_one', side_effect=AssertionError('No DNS')):
@@ -84,7 +84,7 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(argv[argv.index(expected[0]):argv.index(expected[0]) + 2], expected)
             self.assertEqual(argv[argv.index('--version-intensity') + 1], '7')
             self.assertNotIn('--version-light', argv)
-            self.assertEqual(args.url_only, not flags)
+            self.assertEqual(args.url_only, '--url-port-only' in flags)
         args = webscan.parser().parse_args(['::1', '--dry-run', '--version-intensity', '9'])
         scope.prepare_target(args)
         self.assertIn('-6', nmap_scan.command(args, self.root))

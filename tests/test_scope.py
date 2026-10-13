@@ -37,7 +37,7 @@ class ScopeTests(unittest.TestCase):
                 scope.parse_target(value)
 
     def test_dry_run_has_no_dns_and_url_infers_port(self):
-        args = webscan.parser().parse_args(['https://lab.example:4280/app?id=1', '--dry-run'])
+        args = webscan.parser().parse_args(['https://lab.example:4280/app?id=1', '--url-port-only', '--dry-run'])
         with patch.object(scope.socket, 'getaddrinfo', side_effect=AssertionError('No DNS in dry-run')):
             scope.prepare_target(args)
         self.assertEqual(args.target, 'lab.example')
