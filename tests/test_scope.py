@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import crawler
 import scope
-import webscan
+import cli
 from findings import collect
 
 
@@ -37,7 +37,7 @@ class ScopeTests(unittest.TestCase):
                 scope.parse_target(value)
 
     def test_dry_run_has_no_dns_and_url_infers_port(self):
-        args = webscan.parser().parse_args(['https://lab.example:4280/app?id=1', '--url-port-only', '--dry-run'])
+        args = cli.parser().parse_args(['https://lab.example:4280/app?id=1', '--url-port-only', '--dry-run'])
         with patch.object(scope.socket, 'getaddrinfo', side_effect=AssertionError('No DNS in dry-run')):
             scope.prepare_target(args)
         self.assertEqual(args.target, 'lab.example')
@@ -45,7 +45,7 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(args.scan_ip, 'lab.example')
         self.assertEqual(args.input_url, 'https://lab.example:4280/app?id=1')
         self.assertTrue(args.url_only)
-        args = webscan.parser().parse_args(['https://lab.example:4280/', '--all-ports', '--dry-run'])
+        args = cli.parser().parse_args(['https://lab.example:4280/', '--all-ports', '--dry-run'])
         scope.prepare_target(args)
         self.assertFalse(args.url_only)
         self.assertIsNone(args.ports)
@@ -73,13 +73,13 @@ class ScopeTests(unittest.TestCase):
     def test_https_probe_and_crawler_use_hostname_sni_host_and_query(self):
         body = b'<title>Local TLS</title>'
         wire = b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body
-        for fetch in (webscan.probe, crawler.fetch):
+        for fetch in (cli.probe, crawler.fetch):
             fake_socket = MagicMock()
             fake_socket.makefile.return_value = io.BytesIO(wire)
             context = MagicMock()
             context.wrap_socket.return_value = fake_socket
             with patch.object(socket, 'socket', return_value=fake_socket), \
-                 patch.object(webscan.ssl, 'create_default_context', return_value=context):
+                 patch.object(cli.ssl, 'create_default_context', return_value=context):
                 result = fetch('https://lab.example:4280/app?id=1', scan_ip='127.0.0.1')
             fake_socket.connect.assert_called_once_with(('127.0.0.1', 4280))
             self.assertEqual(result['status'], 200)
@@ -89,8 +89,8 @@ class ScopeTests(unittest.TestCase):
             self.assertIn(b'Host: lab.example:4280', request)
 
     def test_file_url_query_is_not_used_as_directory_fuzz_base(self):
-        args = webscan.parser().parse_args(['lab.example', '--dry-run', '--enum', 'ffuf'])
-        jobs = webscan.build_jobs(args, Path('results'), ['https://lab.example:4280/app/item.php?id=1'], {})
+        args = cli.parser().parse_args(['lab.example', '--dry-run', '--enum', 'ffuf'])
+        jobs = cli.build_jobs(args, Path('results'), ['https://lab.example:4280/app/item.php?id=1'], {})
         job = next(j for j in jobs if j.tool == 'ffuf')
         self.assertEqual(job.argv[job.argv.index('-u') + 1], 'https://lab.example:4280/app/FUZZ')
         nuclei = next(j for j in jobs if j.tool == 'nuclei')
@@ -108,9 +108,9 @@ class ScopeTests(unittest.TestCase):
             self.assertEqual(findings[0]['url'], 'https://lab.example:4280/x')
             (root / 'services.xml').write_text('<nmaprun><host><address addr="2001:db8:0:0:0:0:0:1"/>'
                 '<ports><port protocol="tcp" portid="80"><state state="open"/><service name="http"/></port></ports></host></nmaprun>')
-            services = webscan.parse_nmap(root / 'services.xml', '2001:db8::1')
+            services = cli.parse_nmap(root / 'services.xml', '2001:db8::1')
             self.assertEqual(services[0]['port'], 80)
-            self.assertIn('http://[2001:db8::1]:80/', webscan.candidates('2001:db8::1', services))
+            self.assertIn('http://[2001:db8::1]:80/', cli.candidates('2001:db8::1', services))
 
 
 if __name__ == '__main__':

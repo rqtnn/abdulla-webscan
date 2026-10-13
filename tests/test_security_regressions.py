@@ -19,7 +19,7 @@ import evidence
 import findings
 import scope
 import transport
-import webscan
+import cli
 from cli_fixture import cli_platform
 
 
@@ -42,7 +42,7 @@ class Fixture(http.server.BaseHTTPRequestHandler):
                 'paths': {'/never': {'get': {}}}}).encode()
         elif self.path == '/.env':
             content_type, body = 'text/plain', b'DB_HOST=local\nDB_PASSWORD=BODY_SECRET\n'
-        elif self.path.startswith('/rqtn-nonexistent-'):
+        elif self.path.startswith('/wsr-nonexistent-'):
             body = b'not found'
         else:
             if self.path not in ('/', '/app.js'):
@@ -79,7 +79,7 @@ class SecurityRegressions(unittest.TestCase):
 
     def test_pinned_hostname_all_builtin_stages_never_resolve_again(self):
         with patch.object(socket, 'getaddrinfo', side_effect=AssertionError('second DNS lookup')):
-            self.assertEqual(webscan.probe(self.base, scan_ip='127.0.0.1')['status'], 200)
+            self.assertEqual(cli.probe(self.base, scan_ip='127.0.0.1')['status'], 200)
             state = crawler.crawl([self.base], 'pinned.invalid', self.root / 'crawl', threading.Event(),
                 scan_ip='127.0.0.1', rate=1000)
             check = checks.run_checks([{'url': self.base + '/api/ping?id=1', 'parameter': 'id'}],
@@ -135,8 +135,8 @@ class SecurityRegressions(unittest.TestCase):
         cli_platform(self)
         output = self.root / 'runs'
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
-             patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
+             patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
                 '--no-crawl', '--no-auto-sqli', '--rate', '10', '--delay', '.12', '--output', str(output)])
         self.assertEqual(code, 0)
         self.assertEqual(len(Fixture.hits), 2)
@@ -196,9 +196,9 @@ class SecurityRegressions(unittest.TestCase):
     def test_probe_backoff_is_a_reported_gap_without_cli_traceback(self):
         cli_platform(self)
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
-             patch.object(webscan, 'probe', return_value={'url': self.base, 'status': 429, 'title': '', 'retry_after': '30'}), \
-             patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
+             patch.object(cli, 'probe', return_value={'url': self.base, 'status': 429, 'title': '', 'retry_after': '30'}), \
+             patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
                 '--no-crawl', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         doc = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())
@@ -211,8 +211,8 @@ class SecurityRegressions(unittest.TestCase):
         destination = self.root / 'assessment.json'
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1') as resolve, \
              patch.object(socket, 'getaddrinfo', side_effect=AssertionError('unpinned lookup')), \
-             patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main([self.base, '--skip', 'nmap', '--sensitive-files', '--wordlist', str(wordlist),
+             patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
+            code = cli.main([self.base, '--skip', 'nmap', '--sensitive-files', '--wordlist', str(wordlist),
                 '--rate', '50', '--output', str(destination)])
         self.assertEqual(code, 0)
         resolve.assert_called_once_with('pinned.invalid')
@@ -228,10 +228,10 @@ class SecurityRegressions(unittest.TestCase):
     def test_external_scanners_deferred_for_hostname(self):
         cli_platform(self)
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
-             patch.object(webscan, 'tool_paths', return_value={'httpx': '/bin/false'}), \
-             patch.object(webscan.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \
+             patch.object(cli, 'tool_paths', return_value={'httpx': '/bin/false'}), \
+             patch.object(cli.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \
              contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main([self.base, '--external-tools', '--retain-raw-evidence', '--no-crawl',
+            code = cli.main([self.base, '--external-tools', '--retain-raw-evidence', '--no-crawl',
                 '--skip', 'nmap', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         document = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())

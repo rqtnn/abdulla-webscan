@@ -13,7 +13,7 @@ import urllib.parse
 
 import checks
 import crawler
-import webscan
+import cli
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -77,7 +77,7 @@ class DifferentialTests(unittest.TestCase):
         summary = dict(target='127.0.0.1', jobs=[dict(name='check', tool='checks', argv=[],
             folder=str(self.root / 'checks'), status=state['status'], outputs=['checks.json'], elapsed=0, note='')],
             ports=[], probes=[], created='test', mode='sequential', outcome='test')
-        webscan.write_reports(self.root, summary)
+        cli.write_reports(self.root, summary)
         self.assertEqual(len(summary['findings']), 1)
         self.assertEqual(summary['findings'][0]['validation_status'], 'needs_validation')
         self.assertEqual(summary['parse_issues'], [])
@@ -90,7 +90,7 @@ class DifferentialTests(unittest.TestCase):
         state = self.run_checks('/redirect?redirect=/local', 'redirect')
         self.assertEqual(state['checks'][0]['check'], 'external-redirect')
         self.assertEqual(len(Handler.hits), 2)
-        self.assertIn('rqtn.invalid', state['checks'][0]['payload'])
+        self.assertIn('wsr.invalid', state['checks'][0]['payload'])
 
     def test_scope_rejection_happens_before_http(self):
         with patch.object(checks, 'fetch', side_effect=AssertionError('must not fetch')):
@@ -140,15 +140,15 @@ class DifferentialTests(unittest.TestCase):
         self.assertEqual(selected[0]['url'], self.base + '/?id=5')
 
     def test_pipeline_runs_active_checks_independently_of_sqlmap(self):
-        args = webscan.parser().parse_args(['127.0.0.1', '--active-checks', '--no-auto-sqli', '--rate', '50', '--skip', 'nuclei'])
+        args = cli.parser().parse_args(['127.0.0.1', '--active-checks', '--no-auto-sqli', '--rate', '50', '--skip', 'nuclei'])
         summary = dict(target='127.0.0.1', jobs=[])
         crawl_result = dict(status='completed', pages=[], forms=[], limits=[],
                             discovered=[self.base + '/reflect?q=lab'])
         def fake_crawl(*positional, **options):
             positional[2].mkdir(parents=True, exist_ok=True)
             positional[-1].update(crawl_result)
-        with patch.object(webscan, 'crawl', side_effect=fake_crawl), contextlib.redirect_stdout(io.StringIO()):
-            webscan.run_discovered(args, self.root, [self.base + '/'], summary, webscan.Runner(), {})
+        with patch.object(cli, 'crawl', side_effect=fake_crawl), contextlib.redirect_stdout(io.StringIO()):
+            cli.run_discovered(args, self.root, [self.base + '/'], summary, cli.Runner(), {})
         self.assertEqual(summary['injection']['status'], 'disabled')
         self.assertEqual(summary['active_checks']['requests'], 2)
         self.assertEqual(summary['jobs'][-1]['tool'], 'checks')

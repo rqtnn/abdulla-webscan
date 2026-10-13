@@ -1,4 +1,4 @@
-"""Rqtn Tool bounded GET checks; never follow redirects or execute markup."""
+"""WS-R bounded GET checks; never follow redirects or execute markup."""
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
 import http.client
@@ -12,6 +12,7 @@ import threading
 from crawler import fetch, origin, scoped_link
 from scope import RequestGate, resolve_one
 import evidence
+import reliability
 
 SQL_ERRORS = {
     'mysql': re.compile(rb'you have an error in your sql syntax|SQL syntax.*?MySQL|mysqli?_sql_exception', re.I),
@@ -98,9 +99,9 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
             scoped_link(url, url, target, allowed)
             control, body = request(url, 'control')
             record['responses'].append(control)
-            marker = 'rqtn' + uuid.uuid4().hex
+            marker = 'wsr' + uuid.uuid4().hex
             redirect = name.lower() in ('redirect', 'url', 'next', 'return', 'returnto', 'redirect_uri', 'dest', 'destination')
-            payload = f'https://rqtn.invalid/{marker}' if redirect else f'<{marker}>'
+            payload = f'https://wsr.invalid/{marker}' if redirect else f'<{marker}>'
             u = urllib.parse.urlsplit(url)
             pairs = urllib.parse.parse_qsl(u.query, keep_blank_values=True)
             probe = urllib.parse.urlunsplit((u.scheme, u.netloc, u.path,
@@ -162,9 +163,9 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
         except InterruptedError:
             record['error'] = 'Stopped'
             return
-        except (OSError, ValueError, http.client.HTTPException) as exc:
+        except Exception as exc:
             record['outcome'] = 'inconclusive'
-            record['error'] = str(exc)[:500]
+            record['error'] = reliability.record('builtin_check', exc)
             if time.monotonic() >= deadline:
                 state['limits'].append('time_limit')
                 return
@@ -329,8 +330,8 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             elif response['status'] == 200 and title and response['response_sha256'] != control['response_sha256']:
                 record.update(outcome='candidate', check='sensitive-file', title=title,
                     severity=exposure_severity(title), parameter='')
-        except (OSError, ValueError, http.client.HTTPException) as exc:
-            record['error'] = str(exc)[:500]
+        except Exception as exc:
+            record['error'] = reliability.record('sensitive_file_check', exc)
             if time.monotonic() >= deadline:
                 with lock:
                     state['limits'].append('time_limit')
@@ -343,7 +344,7 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
         for base in bases:
             base = scoped_link('/', base, target, allowed)
             if origin(base) not in controls:
-                url = scoped_link('/rqtn-nonexistent-' + uuid.uuid4().hex, base, target, allowed)
+                url = scoped_link('/wsr-nonexistent-' + uuid.uuid4().hex, base, target, allowed)
                 response, _ = request(url, 'file-control')
                 controls[origin(base)] = response
                 state.setdefault('controls', []).append(response)

@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import crawler
-import webscan
+import cli
 
 
 class LabHandler(http.server.BaseHTTPRequestHandler):
@@ -111,14 +111,14 @@ class CrawlerTests(unittest.TestCase):
 
     def test_offline_plan_and_disabled_crawl_do_not_fetch_or_spawn(self):
         for options in (['--dry-run'], ['--no-crawl']):
-            args = webscan.parser().parse_args(['127.0.0.1', *options])
+            args = cli.parser().parse_args(['127.0.0.1', *options])
             summary = {'target': '127.0.0.1', 'jobs': []}
             with patch.object(crawler, 'fetch', side_effect=AssertionError('Unexpected fetch')):
-                webscan.run_discovered(args, self.root, [self.base], summary, webscan.Runner(True), {})
+                cli.run_discovered(args, self.root, [self.base], summary, cli.Runner(True), {})
             self.assertEqual(summary['jobs'], [])
 
     def test_pipeline_selects_and_runs_checks_then_reports(self):
-        args = webscan.parser().parse_args(['127.0.0.1', '--rate', '50', '--skip', 'nuclei'])
+        args = cli.parser().parse_args(['127.0.0.1', '--rate', '50', '--skip', 'nuclei'])
         summary = dict(target='127.0.0.1', jobs=[], ports=[], probes=[], created='test', mode='sequential', outcome='test')
 
         class FakeRunner:
@@ -137,8 +137,8 @@ class CrawlerTests(unittest.TestCase):
                             outputs=job.outputs, status='completed', elapsed=0, note='')
 
         with contextlib.redirect_stdout(io.StringIO()):
-            webscan.run_discovered(args, self.root, [self.base], summary, FakeRunner(), {})
-        webscan.write_reports(self.root, summary)
+            cli.run_discovered(args, self.root, [self.base], summary, FakeRunner(), {})
+        cli.write_reports(self.root, summary)
         self.assertEqual(summary['coverage']['sqli_selected'], 2)
         self.assertEqual(summary['coverage']['sqli_status'], 'completed')
         matches = [f for f in summary['findings'] if f['category'] == 'scanner_match']
@@ -147,7 +147,7 @@ class CrawlerTests(unittest.TestCase):
         self.assertTrue(any(f['category'] == 'configuration' for f in summary['findings']))
 
     def test_discovered_urls_feed_nuclei_when_auto_sqli_is_disabled(self):
-        args = webscan.parser().parse_args(['127.0.0.1', '--rate', '50', '--no-auto-sqli'])
+        args = cli.parser().parse_args(['127.0.0.1', '--rate', '50', '--no-auto-sqli'])
         summary = dict(target='127.0.0.1', jobs=[])
         calls = []
 
@@ -159,7 +159,7 @@ class CrawlerTests(unittest.TestCase):
                 return dict(name=job.name, tool=job.tool, status='planned')
 
         with contextlib.redirect_stdout(io.StringIO()):
-            webscan.run_discovered(args, self.root, [self.base], summary, FakeRunner(), {})
+            cli.run_discovered(args, self.root, [self.base], summary, FakeRunner(), {})
         self.assertEqual(len(calls), 1)
         job = calls[0]
         self.assertEqual(job.tool, 'nuclei')
@@ -170,7 +170,7 @@ class CrawlerTests(unittest.TestCase):
         self.assertEqual(summary['injection']['status'], 'disabled')
 
     def test_interrupt_indexes_partial_crawl_evidence(self):
-        args = webscan.parser().parse_args(['127.0.0.1'])
+        args = cli.parser().parse_args(['127.0.0.1'])
         summary = dict(target='127.0.0.1', jobs=[])
 
         def interrupted(*positional, **options):
@@ -180,11 +180,11 @@ class CrawlerTests(unittest.TestCase):
             state.update(pages=[{'url': self.base, 'status': 200, 'headers': []}], limits=[], status='running')
             raise KeyboardInterrupt
 
-        with patch.object(webscan, 'crawl', side_effect=interrupted), contextlib.redirect_stdout(io.StringIO()):
+        with patch.object(cli, 'crawl', side_effect=interrupted), contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaises(KeyboardInterrupt):
-                webscan.run_discovered(args, self.root, [self.base], summary, webscan.Runner(), {})
+                cli.run_discovered(args, self.root, [self.base], summary, cli.Runner(), {})
         self.assertEqual(summary['jobs'][0]['status'], 'cancelled')
-        findings, issues = webscan.collect(self.root, summary)
+        findings, issues = cli.collect(self.root, summary)
         self.assertEqual(len(findings), 1)
         self.assertEqual(issues, [])
         self.assertEqual(findings[0]['evidence'][0]['job_status'], 'cancelled')

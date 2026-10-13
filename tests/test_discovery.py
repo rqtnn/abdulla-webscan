@@ -7,7 +7,7 @@ import unittest
 
 import crawler
 import checks
-import webscan
+import cli
 from unittest.mock import patch
 from session import Session
 
@@ -135,11 +135,11 @@ class DiscoveryTests(unittest.TestCase):
     def test_session_pipeline_does_not_test_authenticated_candidates_with_unauthenticated_scanners(self):
         path = self.folder / 'cookie.txt'
         path.write_text('session=lab', encoding='utf-8')
-        args = webscan.parser().parse_args(['127.0.0.1', '--rate', '50'])
+        args = cli.parser().parse_args(['127.0.0.1', '--rate', '50'])
         args.session = Session(self.base, path)
         summary = {'target': '127.0.0.1', 'jobs': []}
-        runner = webscan.Runner()
+        runner = cli.Runner()
         with patch.object(runner, 'execute', side_effect=AssertionError('Unauthenticated scanner used')):
-            webscan.run_discovered(args, self.folder, [self.base + '/protected'], summary, runner, {})
+            cli.run_discovered(args, self.folder, [self.base + '/protected'], summary, runner, {})
         self.assertEqual(summary['injection']['status'], 'requires_authenticated_scanner')
         self.assertEqual(summary['injection']['selected'][0]['parameter'], 'id')

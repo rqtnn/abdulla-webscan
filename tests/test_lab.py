@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 import findings
-import webscan
+import cli
 
 
 class LabTests(unittest.TestCase):
@@ -17,8 +17,8 @@ class LabTests(unittest.TestCase):
         self.root = Path(self.temp.name)
 
     def test_nikto_hostname_allows_dns_and_keeps_host_sni(self):
-        args = webscan.parser().parse_args(['https://lab.example:4280', '--dry-run'])
-        jobs = webscan.build_jobs(args, self.root, ['https://lab.example:4280/'], {})
+        args = cli.parser().parse_args(['https://lab.example:4280', '--dry-run'])
+        jobs = cli.build_jobs(args, self.root, ['https://lab.example:4280/'], {})
         job = next(j for j in jobs if j.tool == 'nikto')
         self.assertNotIn('-nolookup', job.argv)
         self.assertEqual(job.argv[job.argv.index('-h') + 1], 'https://lab.example:4280/')
@@ -31,24 +31,24 @@ class LabTests(unittest.TestCase):
         templates = xdg / 'nuclei/nuclei-templates'
         templates.mkdir(parents=True)
         (templates / 'test.yaml').write_text('id: fixture')
-        args = webscan.parser().parse_args(['127.0.0.1'])
-        with patch.object(webscan.Path, 'home', return_value=home), patch.dict(webscan.os.environ,
+        args = cli.parser().parse_args(['127.0.0.1'])
+        with patch.object(cli.Path, 'home', return_value=home), patch.dict(cli.os.environ,
                 {'NUCLEI_TEMPLATES_DIR': '', 'XDG_DATA_HOME': str(xdg), 'XDG_DATA_DIRS': str(self.root / 'empty')}):
-            self.assertEqual(webscan.template_path(args), templates.resolve())
+            self.assertEqual(cli.template_path(args), templates.resolve())
             args.templates = self.root / 'explicit-missing'
-            self.assertEqual(webscan.template_path(args), args.templates.resolve())
-            jobs = webscan.build_jobs(args, self.root, ['http://127.0.0.1/'], {})
+            self.assertEqual(cli.template_path(args), args.templates.resolve())
+            jobs = cli.build_jobs(args, self.root, ['http://127.0.0.1/'], {})
             self.assertIn('No YAML templates', next(j for j in jobs if j.tool == 'nuclei').skip_reason)
 
     def test_lab_profile_respects_explicit_limits_and_opt_out(self):
         argv = ['127.0.0.1', '--profile', 'lab', '--crawl-pages=12', '--sqli-techniques', 'BEU', '--no-active-checks']
-        args = webscan.parser().parse_args(argv)
-        webscan.apply_profile(args, argv)
+        args = cli.parser().parse_args(argv)
+        cli.apply_profile(args, argv)
         self.assertEqual(args.crawl_pages, 12)
         self.assertEqual(args.sqli_techniques, 'BEU')
         self.assertEqual(args.crawl_depth, 5)
         self.assertFalse(args.active_checks)
-        job = webscan.sqlmap_job(args, self.root, 'http://127.0.0.1/?id=1', 'id', 'test', True)
+        job = cli.sqlmap_job(args, self.root, 'http://127.0.0.1/?id=1', 'id', 'test', True)
         self.assertIn('--technique=BEU', job.argv)
         self.assertEqual(job.timeout, 180)
 
@@ -74,7 +74,7 @@ class LabTests(unittest.TestCase):
         summary = dict(target='127.0.0.1', jobs=[dict(name='crawl', tool='crawler', argv=[],
             folder=str(crawl), outputs=['crawl.json'], status='completed', elapsed=0, note='')],
             ports=[], probes=[], created='test', mode='sequential', outcome='test')
-        webscan.write_reports(self.root, summary)
+        cli.write_reports(self.root, summary)
         self.assertEqual(summary['coverage']['severity_counts']['low'], 8)
         self.assertEqual(summary['coverage']['severity_instance_counts']['low'], 12)
         self.assertEqual(len([f for f in summary['findings'] if f['category'] == 'configuration']), 12)
@@ -92,14 +92,14 @@ class LabTests(unittest.TestCase):
         summary = dict(version='1.2.0', target='127.0.0.1', jobs=[], ports=[], probes=[],
                        created='fixture', mode='sequential', outcome='existing run')
         (self.root / 'summary.json').write_text(json.dumps(summary))
-        with patch.object(webscan, 'probe', side_effect=AssertionError('no HTTP')), \
-             patch.object(webscan, 'tool_paths', side_effect=AssertionError('no subprocess')), \
+        with patch.object(cli, 'probe', side_effect=AssertionError('no HTTP')), \
+             patch.object(cli, 'tool_paths', side_effect=AssertionError('no subprocess')), \
              contextlib.redirect_stdout(io.StringIO()):
-            result = webscan.main(['--report-only', str(self.root)])
+            result = cli.main(['--report-only', str(self.root)])
         self.assertEqual(result, 0)
         updated = json.loads((self.root / 'summary.json').read_text())
         self.assertEqual(updated['version'], '1.2.0')
-        self.assertEqual(updated['report_generator_version'], webscan.VERSION)
+        self.assertEqual(updated['report_generator_version'], cli.VERSION)
         self.assertEqual(updated['report_schema_version'], 3)
 
 

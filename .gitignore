@@ -9,5 +9,8 @@ results/
 .pytest_cache/
 cookie.txt
 *.cookie
+*.bearer
+contexts.local.json
+github-*.png
 releases/
 .test-deps/

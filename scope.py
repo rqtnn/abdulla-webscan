@@ -1,4 +1,4 @@
-"""Rqtn Tool single-host parsing, scope enforcement and HTTP pacing."""
+"""WS-R single-host parsing, scope enforcement and HTTP pacing."""
 import dataclasses
 import ipaddress
 import re

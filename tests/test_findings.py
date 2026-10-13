@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import webscan
+import cli
 from findings import collect
 
 
@@ -61,7 +61,7 @@ class FindingsTests(unittest.TestCase):
         self.job('ffuf', {'results': [{'url': 'http://127.0.0.2/a', 'status': 200}]})
         self.job('nuclei', json.dumps({'template-id': 'x', 'matched-at': 'http://127.0.0.1/',
             'info': {'name': '<script>alert(1)</script>'}}), 'jsonl')
-        webscan.write_reports(self.root, self.summary)
+        cli.write_reports(self.root, self.summary)
         report = (self.root / 'report.html').read_text()
         self.assertNotIn('<script>alert', report)
         self.assertEqual(report.count('<script>'), 1)  # Only the fixed, CSP-hashed report filter.
@@ -100,9 +100,9 @@ class FindingsTests(unittest.TestCase):
 
     def test_stable_ids_repeated_reports_do_not_duplicate_evidence(self):
         self.job('ffuf', {'results': [{'url': 'http://127.0.0.1/a', 'status': 200}]})
-        webscan.write_reports(self.root, self.summary)
+        cli.write_reports(self.root, self.summary)
         first = json.loads((self.root / 'summary.json').read_text())['findings']
-        webscan.write_reports(self.root, self.summary)
+        cli.write_reports(self.root, self.summary)
         self.assertEqual(first, self.summary['findings'])
 
     def test_invalid_port_and_foreign_nikto_host_are_not_findings(self):

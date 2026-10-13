@@ -1,4 +1,4 @@
-"""Rqtn Tool bounded HTML/JavaScript discovery for responding origins."""
+"""WS-R bounded HTML/JavaScript discovery for responding origins."""
 from collections import Counter, deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import hashlib
@@ -12,6 +12,8 @@ import urllib.parse
 
 from transport import connection
 import evidence
+import reliability
+import jwt_analyzer
 from brand import USER_AGENT
 
 from scope import normalize_url, origin, scoped_link, ACTION, RequestGate, resolve_one
@@ -131,7 +133,7 @@ def select_candidates(urls, limit):
                 reason = 'Automatic SQLi job limit reached'
             entry = {'url': url, 'parameter': name, 'reason': reason or 'Discovered GET parameter; injection has not been established'}
             if not reason and not value:
-                seed = '1' if name.lower() in ('id', 'uid', 'pid', 'item', 'number') else 'rqtn'
+                seed = '1' if name.lower() in ('id', 'uid', 'pid', 'item', 'number') else 'wsr'
                 seeded = [(k, seed if k == name else v) for k, v in pairs]
                 entry.update(discovered_url=url, url=urllib.parse.urlunsplit((u.scheme, u.netloc,
                     u.path, urllib.parse.urlencode(seeded), '')), seed_value=seed,
@@ -243,6 +245,7 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                         if time.monotonic() >= deadline:
                             raise TimeoutError('Crawl time budget reached')
                 body = response.pop('body')
+                page['jwt'] = jwt_analyzer.discover(body.decode('utf-8', errors='replace'))
                 page.update(response)
                 page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))
                 headers = {k.lower(): v for k, v in page['headers']}
@@ -313,8 +316,8 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                                 form['candidate_url'] = candidate
                         except ValueError as exc:
                             form['reason'] = str(exc)
-            except (OSError, ValueError, http.client.HTTPException) as exc:
-                page['error'] = str(exc)[:500]
+            except Exception as exc:
+                page['error'] = reliability.record('crawl_request_or_parse', exc)
                 if isinstance(exc, TimeoutError) and 'budget' in str(exc):
                     result['limits'].append('time_limit')
             checkpoint()

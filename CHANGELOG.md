@@ -1,3 +1,16 @@
+## 3.0.0 — WS-R
+
+- Rename launchers, tests, HTTP identity and documentation; one minimal banner.
+- Add quiet rotating diagnostics, CLI exception containment, failed subprocess
+  setup records, worker failure handling and recovery-report fallback.
+- Add bounded OpenAPI inventory, explicit account/ownership policy comparisons,
+  adjacent-ID inventory, owned SSRF canaries and opt-in metadata-root probes.
+- Add local JWT structure analysis without storing tokens or personal claims.
+- Integrate captured HTTP proof, redacted cURL helpers and advanced inventory
+  into the unified JSON/HTML assessment.
+- Add regression tests for malformed input, scope, credential isolation,
+  incomplete requests, false-positive controls and storage failures.
+
 ## 2.4.0
 
 - Print one minimal startup banner and improve interactive IPv6/URL handling.
@@ -49,7 +62,7 @@ tests. Linux CI is required for process groups and real TLS fixture verification
 - Make external raw scanner execution explicit, serialize web jobs, and defer hostname jobs with an explanatory coverage gap.
 - Add local security regression fixtures; retain raw-evidence compatibility behind opt-in.
 
-# Rqtn Tool 2.1.0
+# WS-R 2.1.0
 
 - Distinguish dry-run plans from observed Nmap results and scan failures.
 - Show open TCP ports, products, versions, extra information and detection method
@@ -67,10 +80,10 @@ Verified locally: 96 tests, 91 passed and 5 POSIX-only tests skipped on Windows.
 New CLI integration tests use a simulated Nmap response or a dry-run and never
 scan an external target. Real Nmap/scanner execution still needs Kali/WSL testing.
 
-# Rqtn Tool 2.0.0
+# WS-R 2.0.0
 
 - Rebranded CLI, ASCII banner, HTTP User-Agent, report headings and documentation.
-- Added rqtn.py while preserving webscan.py import/CLI compatibility.
+- Added ws_r.py while preserving cli.py import/CLI compatibility.
 - Added bounded HTTP worker pools and shared cancellable request pacing.
 - Centralized URL, origin and redirect scope validation in scope.py.
 - Expanded form inventory and static JavaScript/inline/comment route discovery.

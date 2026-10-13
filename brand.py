@@ -1,3 +1,3 @@
-"""Shared Rqtn Tool version and HTTP identity."""
-VERSION = '2.4.0'
-USER_AGENT = 'Rqtn-Tool/' + VERSION
+"""Shared WS-R version and HTTP identity."""
+VERSION = '3.0.0'
+USER_AGENT = 'WS-R/' + VERSION
