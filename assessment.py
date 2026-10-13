@@ -49,16 +49,17 @@ def inventory_checks(target, ports):
                 continue
             rows.append(dict(check='network-' + check, url='tcp://' + authority(target, port),
                 title=title, severity=severity, recommendation=recommendation,
-                status='observed', confidence='service_identified' if not unknown else 'port_convention_only',
+                status='observed', confidence='port_convention_only' if unknown or service.get('method') == 'table' else 'service_identified',
                 detail=f"TCP {port}: {name}; reachability does not establish unauthorized access."))
         for script in service.get('scripts', []):
             values = script.get('values', [])
             output = script.get('output', '')
             if script.get('id') == 'smb2-security-mode' and any(
-                    'message signing enabled but not required' in text.lower() for text in [output, *values]):
+                    any(phrase in text.lower() for phrase in ('message signing enabled but not required', 'message signing disabled'))
+                    for text in [output, *values]):
                 rows.append(dict(check='network-smb-signing', url='tcp://' + authority(target, port),
                     title='SMB2/SMB3 signing is not required', severity='medium', status='observed',
-                    confidence='protocol_negotiation', detail='Nmap smb2-security-mode reports optional message signing.',
+                    confidence='protocol_negotiation', detail='Nmap smb2-security-mode reports optional or disabled message signing.',
                     recommendation='Require SMB signing where compatible and restrict SMB to trusted hosts; validate client compatibility before rollout.'))
             if script.get('id') == 'ssh2-enum-algos':
                 weak = [algo for algo in ('diffie-hellman-group1-sha1', 'ssh-dss') if algo in values or
