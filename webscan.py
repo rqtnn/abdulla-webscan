@@ -39,7 +39,7 @@ import nmap_scan
 import evidence
 from transport import connection
 
-VERSION = "2.2.0"
+VERSION = "2.2.1"
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
@@ -677,7 +677,9 @@ def parser():
     port_scope = p.add_mutually_exclusive_group()
     port_scope.add_argument("--ports", type=ports, help="TCP ports/ranges; default Nmap's top 1000.")
     port_scope.add_argument("--all-ports", action="store_true", help="TCP 1-65535; slower.")
-    port_scope.add_argument('--top-ports', type=positive, help='Scan N most common TCP ports (1..65535), including for URL targets; default 1000 for bare hosts.')
+    port_scope.add_argument('--top-ports', type=positive, help='Scan N most common TCP ports (1..65535), including for URL targets; default 1000 for URLs and bare hosts.')
+    port_scope.add_argument('--url-port-only', action='store_true', help='Opt in to scanning only the target URL port.')
+    p.add_argument('--nmap-scan', choices=('connect', 'syn'), default='connect', help='connect uses -sT; syn uses -sS and requires raw-socket privileges.')
     p.add_argument('--version-intensity', type=int, choices=range(10), default=7,
                    help='Nmap service probe intensity 0..9; default 7, light=2, exhaustive=9. Higher takes longer.')
     p.add_argument('--nmap-rate', type=positive, default=100, help='Nmap maximum packet rate, <=1000; independent of web --rate.')
@@ -858,7 +860,10 @@ def main(argv=None):
         base_urls = [url.rstrip('/') + '/' for url in args.url]
         if args.input_url:
             base_urls.insert(0, args.input_url)
-        candidate_urls = list(dict.fromkeys(base_urls + ([] if args.url_only else candidates(args.target, services))))
+        # Without an observed port inventory, retain an explicit URL rather than
+        # guessing many unrelated ports after skipped/failed Nmap.
+        derived_urls = candidates(args.target, services) if (summary['ports'] or not args.input_url) and not args.url_only else []
+        candidate_urls = list(dict.fromkeys(base_urls + derived_urls))
         if args.dry_run:
             live = candidate_urls
             summary["outcome"] = "Dry run: planned commands only; HTTP discovery and scanners were not executed."
@@ -880,10 +885,18 @@ def main(argv=None):
                 if "status" in result:
                     live.append(url)
                     say(f"[HTTP] {result['status']} {evidence.url(url)}")
+                else:
+                    say(f"[HTTP ERROR] {evidence.url(url)}: {result.get('error', 'No response')}")
+                    if 'CERTIFICATE_VERIFY_FAILED' in result.get('error', ''):
+                        say('[TLS] Certificate verification failed. Trust the lab CA, or explicitly use --insecure for a self-signed authorized lab.')
                 write_reports(root, summary)
             summary["outcome"] = f"{len(live)} responding HTTP(S) base URLs."
             if not live:
                 summary["outcome"] += " No web tool jobs started; check the IP, ports, TLS or use --url."
+        if not args.dry_run:
+            say('[DISCOVERY] ' + summary['outcome'])
+            if not args.external_tools:
+                say('[WEB] Built-in discovery/checks enabled; external web scanners are opt-in (--external-tools --retain-raw-evidence) for numeric IP targets.')
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
         binaries = tool_paths(args.dry_run) if not runner.stop.is_set() else {}
         jobs = build_jobs(args, root, live, binaries)

@@ -1,3 +1,10 @@
+## 2.2.1
+
+- Scan the top 1000 TCP ports for URL targets by default; add explicit --url-port-only.
+- Support opt-in Nmap SYN scans with --nmap-scan syn.
+- Print HTTP/TLS failures and discovery coverage in the terminal.
+- Feed observed web ports into discovery; avoid speculative port probes for an explicit URL when Nmap has no inventory.
+
 ## 2.2.0
 
 - Pin built-in HTTP to the selected numeric scan address while preserving Host/SNI.
