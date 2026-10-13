@@ -1,3 +1,22 @@
+## 2.4.0
+
+- Print one minimal startup banner and improve interactive IPv6/URL handling.
+- Centralize the version and HTTP identity in brand.py.
+- Add a unified five-level network/web triage matrix and completion statistics;
+  distinguish candidates, configuration observations and confirmed findings.
+- Capture actual built-in HTTP request headers with redaction/exactness metadata
+  and SHA256; add per-finding HTTP, service and TLS proof to JSON and escaped HTML.
+- Add bounded retained-body snippets with hash/path integrity checks and preserve
+  scanner-export provenance or explicit missing exchange data.
+- Persist discovery evidence separately and preserve offline assessment rebuilds.
+- Adapt mocked/loopback CLI tests for Windows without emulating POSIX processes;
+  keep Unix permission checks active on Linux and make OpenSSL prerequisites explicit.
+- Run CI on Ubuntu and Windows with Python 3.10 and 3.12.
+
+Local verification: 134 tests discovered, 128 passed, 6 skipped on Windows
+(5 POSIX-only tests and the OpenSSL-dependent TLS fixture). No failing runnable
+tests. Linux CI is required for process groups and real TLS fixture verification.
+
 ## 2.3.0
 
 - Add full/network/web assessment modes and nine service exposure review rules.

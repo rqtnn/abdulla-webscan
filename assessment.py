@@ -69,6 +69,15 @@ def inventory_checks(target, ports):
                         title='SSH advertises legacy algorithms', severity='low', status='observed',
                         confidence='protocol_negotiation', detail=', '.join(weak),
                         recommendation='Remove obsolete key exchange/host key algorithms after confirming supported client compatibility.'))
+    by_port = {s['port']: s for s in ports}
+    for row in rows:
+        port = urllib.parse.urlsplit(row['url']).port
+        service = by_port[port]
+        row['service_evidence'] = dict(port=port, protocol='tcp', state='open',
+            service=service.get('service', 'unknown'), product=service.get('product', ''),
+            version=service.get('version', ''), extrainfo=service.get('extrainfo', ''),
+            method=service.get('method', 'unspecified'), cpe=service.get('cpe', []),
+            scripts=service.get('scripts', []))
     return rows
 
 
@@ -155,5 +164,60 @@ def findings(root, summary):
             severity=row['severity'], validation_status='needs_validation', recommendation=row['recommendation'],
             detail=row.get('detail', ''), confidence=row.get('confidence', 'direct_handshake'),
             evidence=[dict(tool='network', job='Network configuration and TLS', job_status=state['status'],
-                           file='network/assessment.json', record=index, sha256=digest, raw='[omitted]')]))
+                           file='network/assessment.json', record=index, sha256=digest, raw='[omitted]',
+                           poc=[dict(kind='nmap_service' if row.get('service_evidence') else 'tls_handshake',
+                                     status='observed', data=row.get('service_evidence') or row)])]))
     return results
+
+
+SEVERITIES = ('critical', 'high', 'medium', 'low', 'info')
+PRIORITY = {'critical': 4, 'high': 3, 'medium': 2, 'low': 1, 'info': 0}
+
+
+def unified_risk(summary, groups):
+    """Ordinal triage matrix, not fabricated CVSS or a claim of exploitability."""
+    findings = {f['id']: f for f in summary.get('findings', [])}
+    rows = [dict(severity=s, priority=PRIORITY[s], network=0, web=0, groups=0,
+                 instances=0, confirmed=0) for s in SEVERITIES]
+    matrix = {r['severity']: r for r in rows}
+    counts = dict(vulnerability_candidates=0, configuration_findings=0,
+                  informational_observations=0, confirmed_vulnerabilities=0, unrated_groups=0)
+    ranked = []
+    for group in groups:
+        severity = str(group['severity']).lower()
+        members = [findings[i] for i in group['finding_ids'] if i in findings]
+        if group['category'] not in ('scanner_match', 'configuration'):
+            counts['informational_observations'] += 1
+            continue
+        confirmed = any(f.get('validation_status') == 'confirmed' for f in members)
+        counts['confirmed_vulnerabilities'] += int(confirmed and severity != 'info')
+        if severity == 'info':
+            counts['informational_observations'] += 1
+        elif group['category'] == 'configuration':
+            counts['configuration_findings'] += 1
+        elif not confirmed:
+            counts['vulnerability_candidates'] += 1
+        if severity not in matrix:
+            counts['unrated_groups'] += 1
+            continue
+        row = matrix[severity]
+        network = any(e['tool'] == 'network' for f in members for e in f.get('evidence', []))
+        row['network' if network else 'web'] += 1
+        row['groups'] += 1
+        row['instances'] += len(members)
+        row['confirmed'] += int(confirmed)
+        ranked.append(severity)
+    planned = bool(summary.get('dry_run'))
+    nmap_status = summary.get('nmap', {}).get('status')
+    reached = bool(summary.get('ports') or any('status' in p for p in summary.get('probes', []))
+                   or any(p.get('status') in ('completed', 'observed') for p in summary.get('network_assessment', {}).get('tls', [])))
+    assessed = reached or nmap_status in ('completed', 'completed_no_open_ports', 'partial') or bool(summary.get('probes'))
+    statistics = dict(counts, hosts_assessed=int(assessed and not planned), hosts_reached=int(reached and not planned),
+                      open_ports=len({p['port'] for p in summary.get('ports', [])}) if not planned else 0,
+                      total_observations=len(findings), review_groups=sum(r['groups'] for r in rows) + counts['unrated_groups'])
+    top = max(ranked, key=PRIORITY.get) if ranked else ('unrated' if counts['unrated_groups'] else 'info')
+    if not statistics['hosts_assessed']:
+        top = 'not_assessed'
+    return dict(matrix=rows, overall_priority=top, priority_score=PRIORITY.get(top),
+                score_type='ordinal_triage_0_to_4_not_cvss',
+                note='Priority follows rule/scanner severity. Candidates and configuration notes require validation; gaps do not imply safety.'), statistics

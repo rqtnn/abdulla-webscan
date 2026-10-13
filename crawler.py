@@ -12,6 +12,7 @@ import urllib.parse
 
 from transport import connection
 import evidence
+from brand import USER_AGENT
 
 from scope import normalize_url, origin, scoped_link, ACTION, RequestGate, resolve_one
 
@@ -87,12 +88,13 @@ def fetch(url, insecure=False, timeout=5, max_bytes=262144, headers=None, scan_i
     conn = connection(url, insecure, timeout, scan_ip)
     try:
         conn.request('GET', urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
-                     headers={'User-Agent': 'Rqtn-Tool/2.0', 'Accept': 'text/html, application/javascript',
+                     headers={'User-Agent': USER_AGENT, 'Accept': 'text/html, application/javascript',
                               **(headers or {})})
+        request = evidence.request_details(conn)
         response = conn.getresponse()
         body = response.read(max_bytes + 1)
         headers = [list(pair) for pair in response.getheaders()]
-        return {'status': response.status, 'headers': headers, 'body': body[:max_bytes],
+        return {'status': response.status, 'headers': headers, 'body': body[:max_bytes], 'request': request,
                 'truncated': len(body) > max_bytes}
     finally:
         conn.close()

@@ -6,6 +6,7 @@ import urllib.parse
 from pathlib import Path
 from scope import normalize_url
 from checks import security_headers
+import evidence
 
 
 def sqlmap_outcome(job):
@@ -35,6 +36,9 @@ def finding_groups(findings):
         group = groups.setdefault(key, {k: finding[k] for k in ('title', 'severity', 'category', 'check', 'validation_status')})
         group.setdefault('finding_ids', []).append(finding['id'])
         group.setdefault('urls', []).append(finding['url'])
+    for group in groups.values():
+        group['finding_ids'] = list(dict.fromkeys(group['finding_ids']))
+        group['urls'] = list(dict.fromkeys(group['urls']))
     return list(groups.values())
 
 
@@ -170,7 +174,8 @@ def collect(root, summary):
                             else:
                                 entry['recommendation'] = 'Validate the scanner observation in application context before assigning risk or remediation.'
                             entry['evidence'].append({'tool': tool, 'job': job['name'], 'job_status': job['status'],
-                                'file': rel, 'record': index, 'sha256': digest, 'raw': row if summary.get('retain_raw_evidence', True) else '[omitted]'})
+                                'file': rel, 'record': index, 'sha256': digest, 'raw': row if summary.get('retain_raw_evidence', True) else '[omitted]',
+                                'poc': evidence.record_pocs(tool, row, path.parent, summary.get('retain_raw_evidence', False))})
                     except (ValueError, TypeError, KeyError, AttributeError) as exc:
                         issues.append({'job': job['name'], 'file': rel, 'record': index, 'message': str(exc)})
             except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -187,6 +192,16 @@ def collect(root, summary):
                 'title': f'HTTP endpoint ({row["status"]})', 'severity': 'info',
                 'validation_status': 'needs_validation', 'evidence': [],
                 'recommendation': 'Review intended exposure and access controls; observed during HTTP discovery.'})
+            # summary.json cannot carry its own stable SHA256. Persisted discovery
+            # evidence uses a separate artifact written before report generation.
+            artifact = root / 'discovery' / 'probes.json'
+            reference = dict(tool='discovery', job='HTTP discovery', job_status='observed',
+                             file='discovery/probes.json' if artifact.is_file() else 'summary.json',
+                             record=summary.get('probes', []).index(row) + 1,
+                             poc=[evidence.http_poc(row)], raw='[omitted]')
+            if artifact.is_file():
+                reference['sha256'] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+            merged[key]['evidence'].append(reference)
         except (ValueError, KeyError, TypeError) as exc:
             issues.append({'job': 'HTTP discovery', 'file': 'summary.json', 'message': str(exc)})
     return sorted(merged.values(), key=lambda x: (x['url'], x['category'], x['check'])), issues

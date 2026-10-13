@@ -1,5 +1,6 @@
 """Connections pinned to a numeric address, retaining HTTP Host and TLS identity."""
 import http.client
+import hashlib
 import ipaddress
 import io
 import socket
@@ -64,4 +65,17 @@ def connection(url, insecure=False, timeout=5, scan_ip=None):
             sock.close()
             raise
     conn.connect = connect
+    # Capture the actual HTTP bytes submitted by this connection, never TLS packets.
+    conn.request_capture = bytearray()
+    conn.request_digest = hashlib.sha256()
+    conn.request_bytes = 0
+    original_send = conn.send
+    def send(data):
+        if isinstance(data, (bytes, bytearray)):
+            conn.request_digest.update(data)
+            conn.request_bytes += len(data)
+            available = max(0, 65536 - len(conn.request_capture))
+            conn.request_capture.extend(data[:available])
+        return original_send(data)
+    conn.send = send
     return conn
