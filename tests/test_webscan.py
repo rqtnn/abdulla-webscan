@@ -169,7 +169,8 @@ class WebScanTests(unittest.TestCase):
         webscan.write_reports(self.root, summary)
         report = (self.root / "report.html").read_text()
         self.assertIn("&lt;script&gt;", report)
-        self.assertNotIn("<script>", report)
+        self.assertNotIn("<script>alert", report)
+        self.assertEqual(report.count('<script>'), 1)
 
     @unittest.skipUnless(os.name == 'posix', 'CLI requires Kali/Linux/WSL')
     def test_rejects_sqlmap_parameter_not_in_query(self):
@@ -233,7 +234,7 @@ print("TEST FIXTURE",name)
                                  "--sqlmap-url", f"http://127.0.0.1:{self.port}/?id=1", "--sqlmap-param", "id"])
         self.assertEqual(code, 0)
         data = json.loads(next((self.root / "runs").glob("*/summary.json")).read_text())
-        self.assertEqual(len(data["jobs"]), 10)
+        self.assertEqual(len(data["jobs"]), 11)
         self.assertTrue(all(row["status"] == "completed" for row in data["jobs"]))
         self.assertEqual(data["jobs"][0]["tool"], "nmap")
         self.assertEqual(data["jobs"][-1]["tool"], "sqlmap")
@@ -244,7 +245,8 @@ print("TEST FIXTURE",name)
         self.assertEqual(len(endpoint['evidence']), 4)
         self.assertTrue(all(i['job'] == 'SQLmap selected GET parameter' for i in data['parse_issues']))
         for job in data["jobs"]:
-            self.assertTrue((Path(job["folder"]) / "console.log").exists())
+            if job['tool'] != 'network':
+                self.assertTrue((Path(job["folder"]) / "console.log").exists())
             for output in job["outputs"]:
                 self.assertTrue((Path(job["folder"]) / output).exists())
 

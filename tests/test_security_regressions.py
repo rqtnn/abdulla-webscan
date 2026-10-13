@@ -228,7 +228,8 @@ class SecurityRegressions(unittest.TestCase):
                 '--skip', 'nmap', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         document = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())
-        self.assertTrue(all(j['status'] == 'skipped' for j in document['jobs']))
+        self.assertTrue(all(j['status'] == 'skipped' for j in document['jobs'] if j['tool'] != 'network'))
+        self.assertEqual(document['network_assessment']['status'], 'completed')
         self.assertTrue(any('DNS pinning' in j['note'] for j in document['jobs']))
 
 

@@ -6,10 +6,12 @@ External scanners stay external: this script schedules them and records evidence
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import dataclasses
 import datetime as dt
 import html
+import hashlib
 import http.client
 import ipaddress
 import json
@@ -37,14 +39,29 @@ from terminal import TerminalUI, BANNER
 from findings import finding_groups, sqlmap_outcome
 import nmap_scan
 import evidence
+import assessment
 from transport import connection
 
-VERSION = "2.2.1"
+VERSION = "2.3.0"
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
+REPORT_SCRIPT = """const search = document.getElementById('finding-search');
+const severity = document.getElementById('finding-severity');
+function filterFindings() {
+  let visible = 0;
+  document.querySelectorAll('[data-finding]').forEach(row => {
+    row.hidden = !(row.textContent.toLowerCase().includes(search.value.toLowerCase()) &&
+      (severity.value === 'all' || row.dataset.severity === severity.value));
+    if (!row.hidden) visible++;
+  });
+  document.getElementById('finding-count').textContent = visible + ' observations shown';
+}
+search.addEventListener('input', filterFindings);
+severity.addEventListener('change', filterFindings);
+filterFindings();"""
 
 
 def say(message):
@@ -158,11 +175,19 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
         conn.request("GET", urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
                      headers={"User-Agent": "Rqtn-Tool/" + VERSION})
         response = conn.getresponse()
-        body = response.read(65536).decode("utf-8", "replace")
+        body_error = ''
+        try:
+            body = response.read(65536).decode("utf-8", "replace")
+        except (OSError, http.client.HTTPException) as exc:
+            # A slow/broken body does not erase an already observed HTTP response.
+            body, body_error = '', 'Response headers received; body read failed: ' + str(exc)[:400]
         title = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
-        return {"url": url, "status": response.status, "server": response.getheader("Server", ""),
+        result = {"url": url, "status": response.status, "server": response.getheader("Server", ""),
                 "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip() if title else "",
                 "location": response.getheader("Location", ""), "retry_after": response.getheader("Retry-After", ""), "tls_verified": u.scheme == "https" and not insecure}
+        if body_error:
+            result['error'] = body_error
+        return result
     except (OSError, ssl.SSLError, http.client.HTTPException, ValueError) as exc:
         return {"url": url, "error": str(exc)[:500]}
     finally:
@@ -394,7 +419,7 @@ def run_file_stage(args, root, live, summary, runner):
     try:
         summary['sensitive_files'] = with_progress('Checking sensitive files', run_sensitive_files,
             live, args.target, args.wordlist, files_folder, runner.stop, rate=args.rate,
-            timeout=args.checks_timeout, insecure=args.insecure, session=getattr(args, 'session', None),
+            timeout=args.checks_timeout, request_timeout=args.http_timeout, insecure=args.insecure, session=getattr(args, 'session', None),
             workers=args.http_workers, delay=args.delay, gate=getattr(args, 'request_gate', None), limit=args.file_limit, scan_ip=getattr(args, 'scan_ip', None), retain_raw=getattr(args, 'retain_raw_evidence', False))
     finally:
         state_file = files_folder / 'checks.json'
@@ -432,7 +457,8 @@ def run_discovered(args, root, live, summary, runner, binaries):
     try:
         options = {'workers': args.http_workers, 'delay': args.delay,
                    'gate': getattr(args, 'request_gate', None), 'scan_ip': getattr(args, 'scan_ip', None),
-                   'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True}
+                   'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True,
+                   'request_timeout': args.http_timeout}
         if args.crawl_redirects:
             options['follow_redirects'] = True
         if getattr(args, 'session', None):
@@ -462,7 +488,8 @@ def run_discovered(args, root, live, summary, runner, binaries):
         started = time.monotonic()
         say('[CHECKS] Comparing GET controls with inert reflection and redirect probes')
         try:
-            options = {'scan_ip': getattr(args, 'scan_ip', None), 'retain_raw': getattr(args, 'retain_raw_evidence', False)}
+            options = {'scan_ip': getattr(args, 'scan_ip', None), 'retain_raw': getattr(args, 'retain_raw_evidence', False),
+                       'request_timeout': args.http_timeout}
             if getattr(args, 'session', None):
                 options['session'] = args.session
             summary['active_checks'] = with_progress('Checking GET parameters', run_checks,
@@ -526,6 +553,7 @@ def run_batch(runner, jobs, mode, workers):
 
 def write_reports(root, summary):
     summary['findings'], summary['parse_issues'] = collect(root, summary)
+    summary['findings'].extend(assessment.findings(root, summary))
     ranks = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
     summary['findings'].sort(key=lambda f: (ranks.get(str(f['severity']).lower(), 5), f['url'], f['check']))
     summary['finding_groups'] = finding_groups(summary['findings'])
@@ -571,6 +599,8 @@ def write_reports(root, summary):
     summary['coverage']['nmap_selection'] = summary.get('nmap', {}).get('selection', 'Not recorded by this scan version')
     summary['coverage']['open_tcp_ports'] = len(summary.get('ports', []))
     summary['coverage']['identified_service_versions'] = sum(bool(row.get('version')) for row in summary.get('ports', []))
+    summary['coverage']['network_assessment_status'] = summary.get('network_assessment', {}).get('status', 'not_run')
+    summary['coverage']['tls_handshakes'] = len(summary.get('network_assessment', {}).get('tls', []))
     summary['report_schema_version'] = 3
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
@@ -600,7 +630,7 @@ def write_reports(root, summary):
     for finding in summary['findings']:
         links = ' · '.join(f'<a href="{esc(urllib.parse.quote(e["file"]))}">{esc(e["tool"])} record {e["record"]}</a>'
                            for e in finding['evidence'])
-        finding_rows.append(f'<tr><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small></td><td>{esc(finding["url"])}</td>'
+        finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small></td><td>{esc(finding["url"])}</td>'
                             f'<td>{esc(finding["severity"])}</td><td>needs_validation</td><td>{links}</td>'
                             f'<td>{esc(finding.get("recommendation", ""))}</td></tr>')
     issues = ''.join(f'<li>{esc(json.dumps(issue, ensure_ascii=False))}</li>' for issue in summary['parse_issues'])
@@ -615,24 +645,38 @@ def write_reports(root, summary):
     forms_rows = ''.join('<tr>' + ''.join(f'<td>{esc(f.get(k, ""))}</td>'
         for k in ('source', 'method', 'action', 'reason')) + '</tr>'
         for f in summary.get('crawl', {}).get('forms', []) if f.get('reason'))
+    cards = ''.join(f'<div class="card"><strong>{severity_counts[s]}</strong><span>{s.title()} review groups</span></div>'
+                    for s in ('critical', 'high', 'medium', 'low'))
+    tls_rows = ''.join('<tr>' + ''.join(f'<td>{esc(row.get(k, ""))}</td>' for k in
+        ('url', 'status', 'protocol', 'cipher', 'not_after', 'detail')) + '</tr>'
+        for row in summary.get('network_assessment', {}).get('tls', []))
+    script_hash = base64.b64encode(hashlib.sha256(REPORT_SCRIPT.encode()).digest()).decode()
     report = f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{script_hash}'">
 <title>Rqtn Tool — {esc(summary['target'])}</title>
 <style>body{{background:#101827;color:#e6edf7;font:15px system-ui;margin:0;padding:32px}}
 main{{max-width:1400px;margin:auto}}h1{{color:#85ddce}}h2{{margin-top:32px}}a{{color:#85ddce}}
 table{{width:100%;border-collapse:collapse;background:#172235}}td,th{{text-align:left;padding:12px;
 border-bottom:1px solid #2e3e55;vertical-align:top;overflow-wrap:anywhere}}th{{color:#a3b8cf}}
 .scroll{{overflow:auto}}.note{{background:#203149;padding:16px;border-radius:8px;line-height:1.6}}
+.cards{{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}}
+.card{{background:#203149;border:1px solid #2e3e55;border-radius:12px;padding:20px}}
+.card strong{{font-size:32px;display:block}}.card span{{color:#a3b8cf}}
+input,select{{background:#172235;color:#e6edf7;border:1px solid #a3b8cf;padding:10px;border-radius:6px;margin:8px}}
+[hidden]{{display:none}}nav a{{display:inline-block;margin:8px 16px 8px 0}}
 </style><main><h1>Rqtn Tool</h1><p>Target: {esc(summary['target'])} ·
 {esc(summary['created'])} · Mode: {esc(summary['mode'])}</p>
+<p>Assessment: {esc(summary.get('assessment_mode', 'web'))} · Version: {esc(summary.get('version', 'legacy'))}</p>
+<nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a></nav>
+<div class="cards">{cards}</div>
 <div class="note">{esc(summary['outcome'])}<br>Scanner matches require manual validation.
 Completed means the process exited successfully; it does not certify the site is secure.
 Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an evidence index,
 not a validated penetration testing report. Each active web job uses its own rate cap;
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
-<h2>Assessment coverage</h2><p>One-host web assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
+<h2>Assessment coverage</h2><p>One-host network/web assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. External scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
@@ -642,21 +686,28 @@ endpoint and technology observations are excluded from these counts. Coverage li
 POST forms, JavaScript execution and authenticated workflows require separate review.</p>
 <div class="scroll"><table><tr><th>URL</th><th>Parameter</th><th>Job status</th><th>Detection outcome</th><th>Selection/review reason</th></tr>{injection_rows}</table></div>
 <h2>Deferred forms</h2><div class="scroll"><table><tr><th>Source</th><th>Method</th><th>Action</th><th>Review reason</th></tr>{forms_rows}</table></div>
-<h2>Unified findings ({len(summary['findings'])})</h2><p>Severity is scanner-reported; every observation needs validation.
+<h2 id="findings">Unified findings ({len(summary['findings'])})</h2><p>Severity is rule/scanner-reported; every observation needs validation.
 Distinct checks, queries, schemes, ports and HTTP statuses remain separate.</p>
+<label for="finding-search">Search findings</label><input id="finding-search" type="search" placeholder="Service, URL, title or recommendation">
+<label for="finding-severity">Severity</label><select id="finding-severity"><option value="all">All</option>
+{''.join(f'<option value="{s}">{s.title()}</option>' for s in ranks)}</select><p id="finding-count" aria-live="polite"></p>
 <div class="scroll"><table><tr><th>Observation</th><th>URL</th><th>Scanner severity</th><th>Validation</th><th>Evidence</th><th>Recommended review/remediation</th></tr>
 {''.join(finding_rows)}</table></div><h2>Parsing and manual review gaps</h2><ul>{issues}</ul>
-<h2>Observed open TCP ports and versions</h2><p>{esc(nmap_note)}</p>
+<h2 id="tls">TLS certificate and connection assessment</h2><p>Status: {esc(summary.get('network_assessment', {}).get('status', 'not_run'))}.
+Verified handshakes use the pinned address and original hostname. A negotiation failure is inconclusive.
+The negotiated protocol is not an exhaustive inventory of accepted protocols/ciphers; STARTTLS services are not tested.</p>
+<div class="scroll"><table><tr><th>Origin</th><th>Status</th><th>Negotiated protocol</th><th>Cipher</th><th>Certificate expiry</th><th>Detail</th></tr>{tls_rows}</table></div>
+<h2 id="services">Observed open TCP ports and versions</h2><p>{esc(nmap_note)}</p>
 <div class="scroll"><table><tr><th>Port (TCP, open)</th><th>Service</th>
 <th>Product</th><th>Version</th><th>Extra information</th><th>Detection method</th><th>CPE</th></tr>{port_rows}</table></div>
 <h2>HTTP discovery</h2><div class="scroll"><table><tr><th>URL</th><th>Status</th><th>Title</th>
 <th>Server</th><th>Redirect location</th><th>Probe error</th></tr>{url_rows}</table></div>
-<h2>Tasks and raw evidence</h2><div class="scroll"><table><tr><th>Task</th><th>Status</th>
+<h2 id="tasks">Tasks and evidence</h2><div class="scroll"><table><tr><th>Task</th><th>Status</th>
 <th>Seconds</th><th>Notes</th><th>Files</th></tr>{''.join(job_rows)}</table></div>
 <h2>Manual follow-up</h2><p>Use Burp Suite to inspect authentication, authorization, IDOR,
 business logic, POST forms and XSS. Crawled GET parameters are selected for bounded SQLmap
 checks; unlinked routes, JavaScript-only pages and authenticated endpoints may remain undiscovered.
-</p><p><a href="summary.json">summary.json</a></p></main></html>"""
+</p><p><a href="summary.json">summary.json</a></p></main><script>{REPORT_SCRIPT}</script></html>"""
     (root / "report.html").write_text(report, encoding="utf-8")
 
 
@@ -667,6 +718,11 @@ def parser():
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
     p.add_argument('--profile', choices=('standard', 'lab'), default='standard',
                    help='lab: larger crawl budgets, BEUT SQLi detection and bounded differential GET checks.')
+    p.add_argument('--assessment', choices=('full', 'web', 'network'), default='full',
+                   help='full: network configuration, TLS and web; network: inventory/TLS without HTTP crawling; web: legacy web pipeline.')
+    p.add_argument('--network-timeout', type=positive, default=60, help='Budget for bounded network/TLS assessment in seconds.')
+    p.add_argument('--service-checks', action='store_true', help='Opt in to allowlisted Nmap SSH algorithm and SMB2 signing negotiation; no arbitrary/vuln scripts.')
+    p.add_argument('--http-timeout', type=positive, default=10, help='Per-request timeout for built-in discovery, crawl, checks and TLS; default 10 seconds.')
     p.add_argument('--report-only', type=Path, help='Rebuild reports from an existing run directory; no network/scanners.')
     p.add_argument("--workers", type=positive, default=2, help="Concurrent web tools, default 2.")
     p.add_argument('--http-workers', type=positive, default=4, help='Built-in HTTP workers, 1..8; timing checks use one.')
@@ -729,6 +785,10 @@ def main(argv=None):
     args.target = args.target or args.target_option
     UI = TerminalUI(args.ui)
     apply_profile(args, argv)
+    if args.assessment == 'network' and args.sqlmap_url:
+        p.error('--sqlmap-url requires --assessment web or full.')
+    if args.assessment == 'web' and args.service_checks:
+        p.error('--service-checks requires --assessment network or full.')
     if args.report_only:
         root = args.report_only.expanduser().resolve()
         try:
@@ -831,6 +891,9 @@ def main(argv=None):
                                'time_checks_workers': 1 if args.time_sqli else None}
     summary['external_scanners'] = {'enabled': args.external_tools,
         'policy': 'Numeric IP targets only; explicit raw-evidence opt-in; serialized jobs with per-tool pacing.'}
+    summary['assessment_mode'] = args.assessment
+    summary['service_checks_requested'] = args.service_checks
+    summary['built_in_http']['request_timeout'] = args.http_timeout
     summary['session_scope'] = ('Built-in crawler and GET checks only; external scanners are unauthenticated; '
         'automatic SQLmap and discovered Nuclei deferred' if args.session else 'unauthenticated')
     if not args.no_banner:
@@ -864,6 +927,20 @@ def main(argv=None):
         # guessing many unrelated ports after skipped/failed Nmap.
         derived_urls = candidates(args.target, services) if (summary['ports'] or not args.input_url) and not args.url_only else []
         candidate_urls = list(dict.fromkeys(base_urls + derived_urls))
+        if args.assessment != 'web' and not args.dry_run and not runner.stop.is_set():
+            say('[NETWORK] Reviewing service exposure and verified TLS; no login or exploit probes')
+            started = time.monotonic()
+            folder = root / 'network'
+            summary['network_assessment'] = with_progress('Network configuration and TLS', assessment.run,
+                args.target, args.scan_ip, summary['ports'], base_urls, folder, runner.stop, args.request_gate,
+                timeout=args.network_timeout, request_timeout=args.http_timeout)
+            summary['jobs'].append(dict(name='Network configuration and TLS', tool='network', argv=[],
+                command='Pinned TLS handshakes and Nmap exposure review', folder=str(folder), outputs=['assessment.json'],
+                status=summary['network_assessment']['status'], elapsed=round(time.monotonic() - started, 2), note=''))
+            write_reports(root, summary)
+        if args.assessment == 'network':
+            candidate_urls = []
+            args.no_crawl = True
         if args.dry_run:
             live = candidate_urls
             summary["outcome"] = "Dry run: planned commands only; HTTP discovery and scanners were not executed."
@@ -873,8 +950,9 @@ def main(argv=None):
                 if runner.stop.is_set():
                     break
                 try:
-                    args.request_gate.wait(runner.stop, time.monotonic() + 6 + args.delay)
-                    result = probe(url, args.insecure, scan_ip=args.scan_ip)
+                    args.request_gate.wait(runner.stop, time.monotonic() + args.http_timeout + 1 + args.delay)
+                    say(f'[HTTP PROBE] {evidence.url(url)} (timeout {args.http_timeout}s)')
+                    result = probe(url, args.insecure, timeout=args.http_timeout, scan_ip=args.scan_ip)
                 except TimeoutError as exc:
                     result = {'url': url, 'error': str(exc)}
                 result["fallback_candidate"] = url not in base_urls
@@ -885,20 +963,24 @@ def main(argv=None):
                 if "status" in result:
                     live.append(url)
                     say(f"[HTTP] {result['status']} {evidence.url(url)}")
+                    if result.get('error'):
+                        say(f"[HTTP WARNING] {evidence.url(url)}: {result['error']}")
                 else:
                     say(f"[HTTP ERROR] {evidence.url(url)}: {result.get('error', 'No response')}")
                     if 'CERTIFICATE_VERIFY_FAILED' in result.get('error', ''):
                         say('[TLS] Certificate verification failed. Trust the lab CA, or explicitly use --insecure for a self-signed authorized lab.')
                 write_reports(root, summary)
             summary["outcome"] = f"{len(live)} responding HTTP(S) base URLs."
-            if not live:
+            if args.assessment == 'network':
+                summary['outcome'] = 'Network assessment selected; HTTP discovery and crawling were not requested.'
+            elif not live:
                 summary["outcome"] += " No web tool jobs started; check the IP, ports, TLS or use --url."
         if not args.dry_run:
             say('[DISCOVERY] ' + summary['outcome'])
             if not args.external_tools:
                 say('[WEB] Built-in discovery/checks enabled; external web scanners are opt-in (--external-tools --retain-raw-evidence) for numeric IP targets.')
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
-        binaries = tool_paths(args.dry_run) if not runner.stop.is_set() else {}
+        binaries = tool_paths(args.dry_run) if not runner.stop.is_set() and args.assessment != 'network' else {}
         jobs = build_jobs(args, root, live, binaries)
         summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
         run_discovered(args, root, live, summary, runner, binaries)
@@ -921,8 +1003,10 @@ def main(argv=None):
         return 130
     if args.dry_run:
         return 0
+    if args.assessment == 'network' and summary.get('nmap', {}).get('status') not in ('completed', 'completed_no_open_ports'):
+        return 2
     # Report incomplete coverage even if other scanners succeeded.
-    if not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
+    if args.assessment != 'network' and not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
         return 2
     return 2 if (any("error" in row and not (row.get('fallback_candidate') and any(
                     'status' in other and origin(other['url'])[1:] == origin(row['url'])[1:]

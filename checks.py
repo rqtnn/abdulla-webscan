@@ -43,7 +43,7 @@ def replace_parameter(url, name, value):
 
 
 def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=False, session=None,
-               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None, scan_ip=None, retain_raw=False):
+               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None, scan_ip=None, retain_raw=False, request_timeout=10):
     if not 1 <= workers <= 8:
         raise ValueError('Check workers must be between 1 and 8')
     if time_sqli:
@@ -76,8 +76,8 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
             number = state['requests']
         headers = session.headers_for(url) if session else {}
         started = time.monotonic()
-        response = (fetch(url, insecure, min(5, remaining), headers=headers, scan_ip=scan_ip)
-                    if headers else fetch(url, insecure, min(5, remaining), scan_ip=scan_ip))
+        response = (fetch(url, insecure, min(request_timeout, remaining), headers=headers, scan_ip=scan_ip)
+                    if headers else fetch(url, insecure, min(request_timeout, remaining), scan_ip=scan_ip))
         gate.observe(response)
         response = dict(response)
         body = response.pop('body')
@@ -269,7 +269,7 @@ def exposure_severity(title):
 
 
 def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=120,
-                        insecure=False, session=None, workers=1, delay=0, gate=None, limit=100, progress=None, scan_ip=None, retain_raw=False):
+                        insecure=False, session=None, workers=1, delay=0, gate=None, limit=100, progress=None, scan_ip=None, retain_raw=False, request_timeout=10):
     """Bounded GET-only inventory with per-origin soft-404 controls and content signatures."""
     from collections import deque
     if not 1 <= workers <= 8 or not 1 <= limit <= 1000:
@@ -303,7 +303,7 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             state['requests'] += 1
             number = state['requests']
         headers = session.headers_for(url) if session else {}
-        remaining = min(5, deadline - time.monotonic())
+        remaining = min(request_timeout, deadline - time.monotonic())
         response = fetch(url, insecure, remaining, scan_ip=scan_ip, **({'headers': headers} if headers else {}))
         gate.observe(response)
         response = dict(response)

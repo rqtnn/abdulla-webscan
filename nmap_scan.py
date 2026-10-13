@@ -4,6 +4,8 @@ import ipaddress
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+SERVICE_SCRIPTS = ('ssh2-enum-algos', 'smb2-security-mode')
+
 
 def command(args, folder):
     argv = ['nmap', '-sS' if getattr(args, 'nmap_scan', 'connect') == 'syn' else '-sT', '-sV', '--version-intensity', str(args.version_intensity),
@@ -11,6 +13,8 @@ def command(args, folder):
             '--host-timeout', f'{args.nmap_timeout}s']
     if ':' in args.scan_ip:
         argv.append('-6')
+    if getattr(args, 'service_checks', False):
+        argv += ['--script', ','.join(SERVICE_SCRIPTS), '--script-timeout', f'{args.network_timeout}s']
     argv += (['-p', '1-65535'] if args.all_ports else
              ['-p', args.ports] if args.ports else ['--top-ports', str(args.top_ports or 1000)])
     return argv + ['-oX', str(folder / 'services.xml'), args.scan_ip]
@@ -45,6 +49,7 @@ def read_xml(path, target, allow_partial=False):
                 continue
             matched = True
             timed_out |= element.get('timedout') == 'true'
+            host_scripts = element.findall('hostscript/script')
             for port in element.findall('ports/port'):
                 state = port.find('state')
                 if port.get('protocol') != 'tcp' or state is None or state.get('state') != 'open':
@@ -67,6 +72,15 @@ def read_xml(path, target, allow_partial=False):
                     cpes = [c.text for c in service.findall('cpe') if c.text]
                     if cpes:
                         row['cpe'] = cpes
+                scripts = port.findall('script') + (host_scripts if number == 445 else [])
+                checked = []
+                for script in scripts:
+                    if script.get('id') not in SERVICE_SCRIPTS:
+                        continue
+                    checked.append(dict(id=script.get('id'), output=script.get('output', '')[:8192],
+                        values=[e.text[:512] for e in script.iter('elem') if e.text][:500]))
+                if checked:
+                    row['scripts'] = checked
                 rows[number] = row
             element.clear()
     except ET.ParseError as exc:

@@ -99,7 +99,7 @@ def collect(root, summary):
         if job['status'] in ('planned', 'skipped'):
             continue
         tool = job['tool']
-        if tool == 'nmap':
+        if tool in ('nmap', 'network'):
             continue  # Already parsed into the services table.
         base = next((v for v in job.get('argv', []) if v.startswith(('http://', 'https://'))), '')
         for filename in (['console.log'] if tool == 'sqlmap' else job.get('outputs', [])):

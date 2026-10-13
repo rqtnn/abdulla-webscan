@@ -1,6 +1,7 @@
 """Rqtn Tool terminal presentation; Rich is optional."""
 from contextlib import contextmanager
 import sys
+import time
 
 BANNER = r'''
  ____    ___  _____  _   _    _____  ___   ___   _
@@ -35,11 +36,18 @@ class TerminalUI:
     @contextmanager
     def stage(self, name):
         if not self.console:
-            yield None
+            started, last = time.monotonic(), [0.0]
+            def update(completed, total):
+                now = time.monotonic()
+                if now - last[0] >= 2 or completed == total:
+                    self.message(f'[PROGRESS] {name}: {completed}/{total}; elapsed {int(now - started)}s')
+                    last[0] = now
+            self.message('[STAGE] ' + name)
+            yield update
             return
-        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, MofNCompleteColumn, TimeElapsedColumn
         with Progress(SpinnerColumn(), TextColumn('{task.description}'), BarColumn(),
-                      MofNCompleteColumn(), console=self.console, transient=True) as progress:
+                      MofNCompleteColumn(), TimeElapsedColumn(), console=self.console, transient=True) as progress:
             task = progress.add_task(name, total=None)
             yield lambda completed, total: progress.update(task, completed=completed, total=total)
 

@@ -1,6 +1,6 @@
 """Rqtn Tool bounded HTML/JavaScript discovery for responding origins."""
 from collections import Counter, deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 import hashlib
 from html.parser import HTMLParser
 import http.client
@@ -139,7 +139,7 @@ def select_candidates(urls, limit):
 
 
 def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=120,
-          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None, scan_ip=None, retain_raw=False, api_paths=False):
+          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None, scan_ip=None, retain_raw=False, api_paths=False, request_timeout=10):
     if not 1 <= workers <= 8:
         raise ValueError('Crawler workers must be between 1 and 8')
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -161,8 +161,8 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
         gate.wait(stop, deadline)
         remaining = deadline - time.monotonic()
         request_headers = session.headers_for(url) if session else {}
-        response = (fetch(url, insecure, min(5, remaining), headers=request_headers, scan_ip=scan_ip)
-                if request_headers else fetch(url, insecure, min(5, remaining), scan_ip=scan_ip))
+        response = (fetch(url, insecure, min(request_timeout, remaining), headers=request_headers, scan_ip=scan_ip)
+                if request_headers else fetch(url, insecure, min(request_timeout, remaining), scan_ip=scan_ip))
         gate.observe(response)
         return response
 
@@ -226,7 +226,20 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
             page = {'url': url, 'depth': level}
             result['pages'].append(page)
             try:
-                response = dict(future.result())
+                while True:
+                    try:
+                        response = dict(future.result(timeout=0.25))
+                        break
+                    except FutureTimeoutError:
+                        if future.done():
+                            response = dict(future.result())  # Propagate a request error; handle completion races.
+                            break
+                        if progress:
+                            progress(len(result['pages']) - 1, max_pages)
+                        if stop.is_set():
+                            raise InterruptedError('Stopped while waiting for HTTP')
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError('Crawl time budget reached')
                 body = response.pop('body')
                 page.update(response)
                 page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))

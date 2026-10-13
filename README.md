@@ -1,10 +1,71 @@
 # Rqtn Tool
 
-Rqtn Tool 2.2.1 is a modular Python web assessment tool for one authorized lab host.
+Rqtn Tool 2.3.0 is a modular Python network and web assessment tool for one authorized lab host.
 It discovers web routes, inventories forms, runs bounded preliminary checks and
 combines external scanner output into evidence-preserving JSON/HTML reports.
 Every finding is marked `needs_validation`; a successful process exit is not
 proof of complete coverage or the absence of vulnerabilities.
+
+## Network and web assessment in 2.3
+
+The default `--assessment full` combines TCP inventory, network exposure review,
+verified TLS handshakes and the existing web pipeline. `--assessment network`
+performs inventory/TLS without HTTP discovery, crawling or optional web scanners.
+`--assessment web` selects the previous web pipeline.
+
+```bash
+# Full assessment of one authorized lab host
+python3 rqtn.py 192.168.56.101 --assessment full --output assessment.html
+
+# Inventory/configuration review without the crawler
+python3 rqtn.py 192.168.56.101 --assessment network --output network.html
+
+# Optional SSH algorithm / SMB2 signing negotiation on the authorized host
+python3 rqtn.py 192.168.56.101 --assessment full --service-checks --output services.html
+
+# Bounded web run with an adjustable per-request deadline
+python3 rqtn.py http://127.0.0.1:8000 --http-timeout 15 \
+  --crawl-timeout 60 --crawl-pages 40 --crawl-depth 2 --output web.html
+```
+
+Nine service rules review Telnet, FTP, databases, Redis, Memcached, remote desktop,
+SMB, RPC and SSH reachability. An identified service takes precedence over its
+usual port number; a port-only convention is explicitly lower confidence. These
+are exposure/configuration review items, not proof of anonymous access or CVEs.
+Versions and CPEs remain inventory metadata; no version-only CVE claims are made.
+`--service-checks` explicitly enables only Nmap `ssh2-enum-algos` and
+`smb2-security-mode`, with per-script time limits. Their evidence can identify
+advertised legacy SSH algorithms and optional SMB2/SMB3 signing. No arbitrary
+NSE, exploit, brute-force or login scripts are selected. Missing script output
+is not a clean result; inspect the Nmap XML/console log. See the official
+[SSH script](https://nmap.org/nsedoc/scripts/ssh2-enum-algos.html) and
+[SMB2 script](https://nmap.org/nsedoc/scripts/smb2-security-mode.html) documentation.
+
+TLS runs independently of HTTP response discovery, using the pinned IP and original
+hostname/SNI. It records verified certificate expiry, negotiated protocol/cipher
+and certificate SHA256. Certificate verification failures require review; a private
+lab CA may need scanner trust configuration. `--insecure` does not disable certificate
+verification for this assessment stage. Connection/negotiation failures are
+inconclusive. This is not exhaustive cipher/protocol enumeration, and does not
+cover STARTTLS. The TLS stage has a `--network-timeout` budget (60 seconds) and
+at most 32 origins. Completed inventory with no web service still produces a
+network report; absent/partial inventory is a coverage gap.
+
+Built-in requests now use `--http-timeout` (10 seconds by default), bounded by
+the remaining stage budget. HTTP header/body reads enforce an absolute deadline
+so trickling responses cannot extend a crawl indefinitely. Plain output prints
+stage/progress messages while waiting; Rich shows elapsed time. Reports retain
+partial results and distinguish completed, limited and inconclusive checks.
+Discovery preserves an observed HTTP status even if its response body times out;
+the service still feeds later checks, while the incomplete body is a coverage gap.
+
+The offline HTML dashboard adds severity cards, section navigation and finding
+search/severity filters. A fixed inline filtering script is allowed by its CSP
+SHA256; target-controlled text remains escaped. No CDN, network script or telemetry
+is used. `network/assessment.json` and its digest preserve assessment evidence;
+offline rebuilding retains the original scan data. This release is an assessment
+foundation, not Nessus feature parity: no credentialed OS/package audit, UDP,
+multi-host scheduling or maintained CVE feed is provided.
 
 ## URL scan behavior in 2.2.1
 
@@ -60,6 +121,7 @@ rqtn-tool/
   rqtn.py          # Branded CLI entry point
   webscan.py       # CLI/orchestration; existing imports remain compatible
   nmap_scan.py     # Single-IP service inventory, versions and XML evidence
+  assessment.py    # Bounded network exposure review and verified TLS assessment
   crawler.py       # Concurrent HTML/JavaScript discovery and form inventory
   checks.py        # Reflection, redirects, SQL error/timing and file checks
   transport.py     # Numeric-IP connections preserving Host and TLS identity
@@ -323,7 +385,7 @@ both canonical formats plus evidence in a uniquely named run under
 exported JSON includes `evidence_directory`. Keep the report and evidence
 directory together when transferring them.
 
-The HTML escapes untrusted content and disables scripts with a restrictive CSP.
+The HTML escapes untrusted content and permits only its fixed filtering script through a CSP SHA256.
 Rich provides colored status messages, stage progress bars and a severity table
 for Critical/High/Medium/Low groups. Use `--ui rich` or `--ui plain`; auto mode
 uses Rich only in a terminal when installed. Progress describes completed work
