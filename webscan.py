@@ -42,7 +42,7 @@ import evidence
 import assessment
 from transport import connection
 
-VERSION = "2.3.0"
+from brand import VERSION
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
@@ -85,6 +85,7 @@ def with_progress(name, function, *positional, **options):
 
 def export_reports(root, destination):
     """Export a report while keeping the complete evidence directory."""
+    root = root.expanduser().resolve()
     destination = destination.expanduser().resolve()
     if destination.suffix.lower() not in ('.json', '.html'):
         raise ValueError('Report export requires .json or .html')
@@ -174,6 +175,7 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
         conn = connection(url, insecure, timeout, scan_ip)
         conn.request("GET", urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
                      headers={"User-Agent": "Rqtn-Tool/" + VERSION})
+        request = evidence.request_details(conn)
         response = conn.getresponse()
         body_error = ''
         try:
@@ -182,7 +184,7 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
             # A slow/broken body does not erase an already observed HTTP response.
             body, body_error = '', 'Response headers received; body read failed: ' + str(exc)[:400]
         title = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
-        result = {"url": url, "status": response.status, "server": response.getheader("Server", ""),
+        result = {"url": url, "status": response.status, 'request': request, 'headers': [list(p) for p in response.getheaders()], "server": response.getheader("Server", ""),
                 "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip() if title else "",
                 "location": response.getheader("Location", ""), "retry_after": response.getheader("Retry-After", ""), "tls_verified": u.scheme == "https" and not insecure}
         if body_error:
@@ -552,11 +554,16 @@ def run_batch(runner, jobs, mode, workers):
 
 
 def write_reports(root, summary):
+    if summary.get('probes'):
+        folder = root / 'discovery'
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        (folder / 'probes.json').write_text(evidence.dumps(summary['probes']), encoding='utf-8')
     summary['findings'], summary['parse_issues'] = collect(root, summary)
     summary['findings'].extend(assessment.findings(root, summary))
     ranks = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
     summary['findings'].sort(key=lambda f: (ranks.get(str(f['severity']).lower(), 5), f['url'], f['check']))
     summary['finding_groups'] = finding_groups(summary['findings'])
+    summary['risk_assessment'], summary['statistics'] = assessment.unified_risk(summary, summary['finding_groups'])
     severity_counts = {s: 0 for s in ranks}
     for f in summary['finding_groups']:
         if f['category'] in ('scanner_match', 'configuration'):
@@ -601,6 +608,9 @@ def write_reports(root, summary):
     summary['coverage']['identified_service_versions'] = sum(bool(row.get('version')) for row in summary.get('ports', []))
     summary['coverage']['network_assessment_status'] = summary.get('network_assessment', {}).get('status', 'not_run')
     summary['coverage']['tls_handshakes'] = len(summary.get('network_assessment', {}).get('tls', []))
+    summary['coverage']['poc_artifact_only_findings'] = sum(
+        not any(p.get('kind') in ('http', 'nmap_service', 'tls_handshake') and p.get('status') in ('captured', 'observed')
+                for e in f.get('evidence', []) for p in e.get('poc', [])) for f in summary['findings'])
     summary['report_schema_version'] = 3
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
@@ -630,9 +640,11 @@ def write_reports(root, summary):
     for finding in summary['findings']:
         links = ' · '.join(f'<a href="{esc(urllib.parse.quote(e["file"]))}">{esc(e["tool"])} record {e["record"]}</a>'
                            for e in finding['evidence'])
+        poc = [p for e in finding.get('evidence', []) for p in e.get('poc', [])]
+        proof = '<details><summary>Observed evidence / PoC</summary><pre>' + esc(json.dumps(poc, indent=2, ensure_ascii=False)) + '</pre></details>'
         finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small></td><td>{esc(finding["url"])}</td>'
                             f'<td>{esc(finding["severity"])}</td><td>needs_validation</td><td>{links}</td>'
-                            f'<td>{esc(finding.get("recommendation", ""))}</td></tr>')
+                            f'<td>{esc(finding.get("recommendation", ""))}{proof}</td></tr>')
     issues = ''.join(f'<li>{esc(json.dumps(issue, ensure_ascii=False))}</li>' for issue in summary['parse_issues'])
     coverage_rows = ''.join(f'<tr><th>{esc(k)}</th><td>{esc(json.dumps(v) if isinstance(v, (dict, list)) else v)}</td></tr>'
                             for k, v in summary['coverage'].items())
@@ -646,7 +658,11 @@ def write_reports(root, summary):
         for k in ('source', 'method', 'action', 'reason')) + '</tr>'
         for f in summary.get('crawl', {}).get('forms', []) if f.get('reason'))
     cards = ''.join(f'<div class="card"><strong>{severity_counts[s]}</strong><span>{s.title()} review groups</span></div>'
-                    for s in ('critical', 'high', 'medium', 'low'))
+                    for s in ('critical', 'high', 'medium', 'low', 'info'))
+    risk_rows = ''.join('<tr>' + ''.join(f'<td>{esc(row[k])}</td>' for k in
+        ('severity', 'priority', 'network', 'web', 'groups', 'instances', 'confirmed')) + '</tr>'
+        for row in summary['risk_assessment']['matrix'])
+    statistics_rows = ''.join(f'<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>' for k, v in summary['statistics'].items())
     tls_rows = ''.join('<tr>' + ''.join(f'<td>{esc(row.get(k, ""))}</td>' for k in
         ('url', 'status', 'protocol', 'cipher', 'not_after', 'detail')) + '</tr>'
         for row in summary.get('network_assessment', {}).get('tls', []))
@@ -665,11 +681,17 @@ border-bottom:1px solid #2e3e55;vertical-align:top;overflow-wrap:anywhere}}th{{c
 .card strong{{font-size:32px;display:block}}.card span{{color:#a3b8cf}}
 input,select{{background:#172235;color:#e6edf7;border:1px solid #a3b8cf;padding:10px;border-radius:6px;margin:8px}}
 [hidden]{{display:none}}nav a{{display:inline-block;margin:8px 16px 8px 0}}
+pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}}
 </style><main><h1>Rqtn Tool</h1><p>Target: {esc(summary['target'])} ·
 {esc(summary['created'])} · Mode: {esc(summary['mode'])}</p>
 <p>Assessment: {esc(summary.get('assessment_mode', 'web'))} · Version: {esc(summary.get('version', 'legacy'))}</p>
 <nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a></nav>
 <div class="cards">{cards}</div>
+<h2>Assessment statistics</h2><table>{statistics_rows}</table>
+<h2>Unified triage matrix</h2><p>Overall priority: {esc(summary['risk_assessment']['overall_priority'])}.
+{esc(summary['risk_assessment']['note'])} Ordinal priorities 0–4 are not CVSS scores.</p>
+<div class="scroll"><table><tr><th>Severity</th><th>Priority</th><th>Network groups</th><th>Web groups</th>
+<th>Total groups</th><th>Instances</th><th>Confirmed groups</th></tr>{risk_rows}</table></div>
 <div class="note">{esc(summary['outcome'])}<br>Scanner matches require manual validation.
 Completed means the process exited successfully; it does not certify the site is secure.
 Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an evidence index,
@@ -814,11 +836,15 @@ def main(argv=None):
         available = templates.is_dir() and next(templates.rglob('*.yaml'), None) is not None
         say(f'Nuclei YAML: {templates} ({"found" if available else "MISSING"})')
         return 0
+    if not args.no_banner:
+        UI.startup(VERSION)
     if not args.target:
         try:
-            entered = input('Rqtn Tool target URL/IP (e.g. http://127.0.0.1:3000): ').strip()
-            args.target = target_input(entered if '://' in entered else 'http://' + entered)
-        except (argparse.ArgumentTypeError, EOFError) as exc:
+            entered = UI.prompt_target().strip()
+            # Preserve valid bare IPv6 syntax; interactive bare hosts default to HTTP.
+            parsed = parse_target(entered)
+            args.target = parsed.url or 'http://' + authority(parsed.host) + '/'
+        except (ValueError, argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
     if sum(bool(v) for v in (args.ports, args.all_ports, args.top_ports)) > 1:
         p.error('Use only one of --ports, --all-ports or --top-ports.')
@@ -896,9 +922,7 @@ def main(argv=None):
     summary['built_in_http']['request_timeout'] = args.http_timeout
     summary['session_scope'] = ('Built-in crawler and GET checks only; external scanners are unauthenticated; '
         'automatic SQLmap and discovered Nuclei deferred' if args.session else 'unauthenticated')
-    if not args.no_banner:
-        say(BANNER)
-    say(f"Rqtn Tool {VERSION} | target {args.target} | {args.mode}\nResults: {root}")
+    say(f"Target: {args.target} | Assessment: {args.assessment} | {args.mode}\nResults: {root}")
     summary['nmap'] = dict(status='skipped', selection=nmap_scan.selection(args),
                            note='Nmap was excluded with --skip; no observed port inventory.')
     if args.dry_run:
@@ -998,6 +1022,7 @@ def main(argv=None):
         if export_path:
             say(f'Exported report: {export_reports(root, export_path)}')
         UI.severity_table(summary['coverage']['severity_counts'])
+        UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
         say(f"\nReport: {root / 'report.html'}")
     if runner.stop.is_set():
         return 130

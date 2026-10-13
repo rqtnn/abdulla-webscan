@@ -241,8 +241,9 @@ print("TEST FIXTURE",name)
         self.assertEqual(data["ports"][0]["port"], self.port)
         self.assertTrue(data['findings'])
         self.assertTrue(all(f['validation_status'] == 'needs_validation' for f in data['findings']))
-        endpoint = next(f for f in data['findings'] if f['category'] == 'endpoint' and f['evidence'])
+        endpoint = next(f for f in data['findings'] if f['category'] == 'endpoint' and f['url'].endswith('/admin'))
         self.assertEqual(len(endpoint['evidence']), 4)
+        self.assertEqual({e['tool'] for e in endpoint['evidence']}, set(webscan.ENUM_TOOLS))
         self.assertTrue(all(i['job'] == 'SQLmap selected GET parameter' for i in data['parse_issues']))
         for job in data["jobs"]:
             if job['tool'] != 'network':

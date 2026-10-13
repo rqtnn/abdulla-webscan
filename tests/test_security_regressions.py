@@ -4,6 +4,7 @@ import hashlib
 import http.server
 import io
 import json
+import os
 from pathlib import Path
 import socket
 import tempfile
@@ -19,6 +20,7 @@ import findings
 import scope
 import transport
 import webscan
+from cli_fixture import cli_platform
 
 
 class Fixture(http.server.BaseHTTPRequestHandler):
@@ -130,6 +132,7 @@ class SecurityRegressions(unittest.TestCase):
         self.assertTrue(any('foreign.invalid' in r['url'] for r in state['excluded']))
 
     def test_pipeline_paces_initial_probes_and_reports_without_optional_scanners(self):
+        cli_platform(self)
         output = self.root / 'runs'
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
@@ -142,7 +145,8 @@ class SecurityRegressions(unittest.TestCase):
         self.assertEqual(len(document['findings']), 2)
         self.assertFalse(document['external_scanners']['enabled'])
         run = next(output.iterdir())
-        self.assertEqual(run.stat().st_mode & 0o077, 0)
+        if os.name == 'posix':
+            self.assertEqual(run.stat().st_mode & 0o077, 0)
 
     def test_grouped_dirsearch_output_and_probe_inventory(self):
         (self.root / 'results.json').write_text(json.dumps({'results': {self.base + '/': [
@@ -190,6 +194,7 @@ class SecurityRegressions(unittest.TestCase):
         self.assertEqual(errors, ['throttled'])
 
     def test_probe_backoff_is_a_reported_gap_without_cli_traceback(self):
+        cli_platform(self)
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(webscan, 'probe', return_value={'url': self.base, 'status': 429, 'title': '', 'retry_after': '30'}), \
              patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
@@ -200,6 +205,7 @@ class SecurityRegressions(unittest.TestCase):
         self.assertTrue(any('budget' in p.get('error', '') for p in doc['probes']))
 
     def test_complete_local_cli_exports_safe_nonempty_results(self):
+        cli_platform(self)
         wordlist = self.root / 'paths.txt'
         wordlist.write_text('.env\n')
         destination = self.root / 'assessment.json'
@@ -220,6 +226,7 @@ class SecurityRegressions(unittest.TestCase):
                     self.assertNotIn(secret, file.read_bytes(), str(file))
 
     def test_external_scanners_deferred_for_hostname(self):
+        cli_platform(self)
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(webscan, 'tool_paths', return_value={'httpx': '/bin/false'}), \
              patch.object(webscan.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \

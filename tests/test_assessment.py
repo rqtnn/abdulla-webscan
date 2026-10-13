@@ -8,6 +8,7 @@ import json
 import socket
 import ssl
 import subprocess
+import shutil
 import tempfile
 import threading
 import time
@@ -20,6 +21,7 @@ import crawler
 import nmap_scan
 import transport
 import webscan
+from cli_fixture import cli_platform
 from scope import RequestGate
 
 
@@ -36,7 +38,7 @@ class SlowHandler(http.server.BaseHTTPRequestHandler):
             for byte in wire:
                 self.connection.sendall(bytes([byte]))
                 time.sleep(0.04)
-        except (BrokenPipeError, ConnectionResetError):
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass
 
     def log_message(self, *args):
@@ -114,6 +116,7 @@ class AssessmentTests(unittest.TestCase):
         self.assertNotIn('severity', row)
 
     def test_network_mode_runs_without_http_or_optional_binaries_and_rebuilds_offline(self):
+        cli_platform(self)
         def execute(runner, job):
             return dict(name=job.name, tool=job.tool, argv=job.argv, folder=str(job.folder),
                         outputs=[], status='completed', elapsed=0, note='')
@@ -141,6 +144,7 @@ class AssessmentTests(unittest.TestCase):
         self.assertIn('id="finding-search"', report)
 
     def test_network_without_inventory_does_not_claim_complete_coverage(self):
+        cli_platform(self)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(webscan.main(['127.0.0.1', '--assessment', 'network', '--skip', 'nmap', '--output', str(self.root)]), 2)
 
@@ -176,6 +180,7 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(state['status'], 'completed')
         self.assertEqual(state['pages'][0]['status'], 200)
 
+    @unittest.skipUnless(shutil.which('openssl'), 'TLS certificate fixture requires OpenSSL (available in Linux CI)')
     def test_real_tls_pinned_sni_trust_and_untrusted_certificate(self):
         cert, key = self.root / 'cert.pem', self.root / 'key.pem'
         subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',

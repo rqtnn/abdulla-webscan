@@ -1,5 +1,12 @@
 # Tests
 
+Version 2.4 adds unified network/web priority statistics, captured request PoC,
+credential redaction, body evidence integrity, concurrent session isolation,
+single-banner/interactive IPv6 startup and escaped offline PoC reports.
+Mocked/loopback CLI tests adapt only the platform guard on native Windows;
+POSIX process tests remain Linux-only. The real TLS fixture requires OpenSSL.
+CI runs Python 3.10 and 3.12 on Ubuntu and Windows.
+
 Version 2.3 adds `test_assessment.py`: network-only runs and offline evidence
 rebuilds, identified-service precedence and lower-confidence port conventions,
 budget/cancellation coverage, CSP script digest, crawler waiting progress,

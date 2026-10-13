@@ -1,10 +1,44 @@
 # Rqtn Tool
 
-Rqtn Tool 2.3.0 is a modular Python network and web assessment tool for one authorized lab host.
+Rqtn Tool 2.4.0 is a modular Python network and web assessment tool for one authorized lab host.
 It discovers web routes, inventories forms, runs bounded preliminary checks and
 combines external scanner output into evidence-preserving JSON/HTML reports.
 Every finding is marked `needs_validation`; a successful process exit is not
 proof of complete coverage or the absence of vulnerabilities.
+
+## Unified assessment and PoC in 2.4
+
+Startup displays `RQTN TOOL | 2.4.0` once; `--no-banner` suppresses it.
+The interactive target prompt supports HTTP(S), bare hostnames/IPs, explicit
+ports/paths and IPv6. Built-in HTTP workers keep separate connections and share
+the existing scope/rate gate; session cookies remain bound to one origin.
+
+JSON adds `risk_assessment` and `statistics`. The matrix contains Critical,
+High, Medium, Low and Info rows with network/web group counts, instance counts
+and confirmed-group counts. Repeated header notes count once per origin.
+Unknown scanner severities remain explicitly unrated rather than being silently
+classified as Info. Priority values 0–4 are ordinal triage labels, **not CVSS**.
+Statistics distinguish hosts assessed/reached, open TCP ports, vulnerability
+candidates, configuration findings, informational observations and confirmed
+vulnerabilities. Detection never promotes a candidate to confirmed. Plans and
+unassessed runs count zero hosts; missing evidence is not a clean bill of health.
+
+Each finding's `evidence[].poc` carries observed HTTP or network proof. Built-in
+HTTP captures the actual request submitted by its own connection, including
+method, target, headers and SHA256. Credential/query redaction is explicit;
+`exact` is false when redaction or truncation changes the displayed request.
+HTTP status and response headers are retained, with an optional 2 KiB response
+snippet when `--retain-raw-evidence` is enabled. Saved-body hashes are verified
+before displaying snippets. Nmap service metadata and negotiated TLS evidence
+remain linked to their assessment artifact. Discovery responses get a separate
+`discovery/probes.json` artifact and digest rather than a self-referencing hash.
+Imported scanners can supply exported exchanges; these are labelled scanner
+exports, not transport captures. Missing exchange data is marked artifact-only
+and counted in coverage; requests are never invented for legacy results.
+
+The CLI completion summary and HTML dashboard share this same assessment data.
+Offline rebuilds preserve original observations and recompute these statistics.
+No response body retention is enabled merely by requesting PoC logging.
 
 ## Network and web assessment in 2.3
 

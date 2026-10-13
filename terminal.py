@@ -3,14 +3,7 @@ from contextlib import contextmanager
 import sys
 import time
 
-BANNER = r'''
- ____    ___  _____  _   _    _____  ___   ___   _
-|  _ \  / _ \|_   _|| \ | |  |_   _|/ _ \ / _ \ | |
-| |_) || | | | | |  |  \| |    | | | | | | | | || |
-|  _ < | |_| | | |  | |\  |    | | | |_| | |_| || |___
-|_| \_\ \__\_\ |_|  |_| \_|    |_|  \___/ \___/ |_____|
-                    RQTN TOOL
-'''
+BANNER = 'RQTN TOOL'
 
 
 class TerminalUI:
@@ -24,6 +17,20 @@ class TerminalUI:
         except ImportError:
             if mode == 'rich':
                 print('Rich is unavailable; using plain output. Install requirements.txt for Rich.')
+
+    def startup(self, version):
+        self.message(f'{BANNER} | {version}')
+
+    def prompt_target(self):
+        prompt = 'Target URL/IP (e.g. http://127.0.0.1:3000): '
+        return self.console.input(prompt) if self.console else input(prompt)
+
+    def completion(self, statistics, priority):
+        self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '
+                     'Open TCP ports={open_ports} | Candidate vulnerabilities={vulnerability_candidates} | '
+                     'Configuration findings={configuration_findings} | '
+                     'Confirmed vulnerabilities={confirmed_vulnerabilities}'.format(**statistics))
+        self.message('[PRIORITY] ' + priority + ' (triage priority, not CVSS or confirmed risk)')
 
     def message(self, message):
         if self.console:
@@ -77,12 +84,12 @@ class TerminalUI:
     def severity_table(self, counts):
         if not self.console:
             self.message('Unvalidated severity groups: ' + ', '.join(f'{name}={counts.get(name, 0)}'
-                for name in ('critical', 'high', 'medium', 'low')))
+                for name in ('critical', 'high', 'medium', 'low', 'info')))
             return
         from rich.table import Table
-        table = Table(title='Rqtn Tool — findings needing validation')
+        table = Table(title='Findings needing validation')
         table.add_column('Severity')
         table.add_column('Groups', justify='right')
-        for name, style in (('critical', 'bold red'), ('high', 'red'), ('medium', 'yellow'), ('low', 'cyan')):
+        for name, style in (('critical', 'bold red'), ('high', 'red'), ('medium', 'yellow'), ('low', 'cyan'), ('info', 'white')):
             table.add_row(name.title(), str(counts.get(name, 0)), style=style)
         self.console.print(table)
