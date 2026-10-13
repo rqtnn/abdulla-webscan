@@ -1,5 +1,14 @@
 # Tests
 
+Version 2.3 adds `test_assessment.py`: network-only runs and offline evidence
+rebuilds, identified-service precedence and lower-confidence port conventions,
+budget/cancellation coverage, CSP script digest, crawler waiting progress,
+real loopback TLS with trusted/untrusted certificates and pinned SNI, and
+trickling HTTP headers/body deadline regressions, allowlisted NSE output and
+negative SSH/SMB configuration controls. TLS fixtures generate a local
+certificate using OpenSSL; no external endpoint is contacted. All 124 tests
+passed on Python 3.12/Linux with Rich installed on 2026-10-13.
+
 Version 2.2 adds `test_security_regressions.py`: numeric-IP HTTP pinning with
 hostname Host/SNI, IPv6 socket selection, safe default evidence, explicit raw
 retention, rejected-URL credential/fragment redaction, whole-URL sensitive-query

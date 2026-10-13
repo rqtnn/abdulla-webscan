@@ -63,7 +63,8 @@ class FindingsTests(unittest.TestCase):
             'info': {'name': '<script>alert(1)</script>'}}), 'jsonl')
         webscan.write_reports(self.root, self.summary)
         report = (self.root / 'report.html').read_text()
-        self.assertNotIn('<script>', report)
+        self.assertNotIn('<script>alert', report)
+        self.assertEqual(report.count('<script>'), 1)  # Only the fixed, CSP-hashed report filter.
         self.assertIn('&lt;script&gt;', report)
         self.assertEqual(len(self.summary['findings']), 1)
         self.assertEqual(len(self.summary['parse_issues']), 1)
