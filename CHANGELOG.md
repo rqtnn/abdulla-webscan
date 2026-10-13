@@ -1,3 +1,15 @@
+## 2.3.0
+
+- Add full/network/web assessment modes and nine service exposure review rules.
+- Add opt-in allowlisted SSH algorithm and SMB2 signing negotiation with evidence-backed configuration findings.
+- Assess pinned TLS independently of HTTP: verified certificate expiry, chain/hostname errors, negotiated protocol/cipher and certificate digest.
+- Preserve network assessment evidence and recommendations in JSON and offline reports.
+- Add severity dashboard cards, section navigation and CSP-hashed finding search/filtering.
+- Add --http-timeout and enforce absolute HTTP header/body deadlines against trickling peers.
+- Preserve responding HTTP services when the body is slow or incomplete; record the coverage warning.
+- Show waiting crawler progress and elapsed time in plain/Rich output.
+- Add real loopback TLS and slow-peer tests plus network-only/offline/report regressions.
+
 ## 2.2.1
 
 - Scan the top 1000 TCP ports for URL targets by default; add explicit --url-port-only.
