@@ -4,7 +4,7 @@ This does not emulate POSIX process groups. Those tests remain POSIX-only.
 """
 import os
 from unittest.mock import patch
-import webscan
+import cli
 
 
 class PlatformGuard:
@@ -15,7 +15,7 @@ class PlatformGuard:
 
 
 def cli_platform(test_case=None):
-    guard = patch.object(webscan, 'os', PlatformGuard())
+    guard = patch.object(cli, 'os', PlatformGuard())
     if test_case is not None:
         test_case.addCleanup(guard.stop)
         guard.start()

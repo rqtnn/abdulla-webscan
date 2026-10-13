@@ -1,5 +1,12 @@
 # Tests
 
+WS-R 3.0 adds `test_advanced.py`: bounded Swagger parsing, non-executed routes,
+malformed JWT/claim handling, adjacent/string identifiers, declared ownership
+and role comparisons, scoped account cookies, SSRF reflection controls,
+metadata root-only probes, request limits, redacted logs, failed subprocess setup,
+report recovery and crawler JWT discovery. All fixtures use isolated loopback
+servers or mocks. `test_ws_r.py` and `test_cli.py` replace the old branded names.
+
 Version 2.4 adds unified network/web priority statistics, captured request PoC,
 credential redaction, body evidence integrity, concurrent session isolation,
 single-banner/interactive IPv6 startup and escaped offline PoC reports.
@@ -43,7 +50,7 @@ python3 -m unittest discover -s tests -v
 Tests use local HTTP servers and simulated scanner results. They do not scan external targets.
 Native Windows skips five POSIX-only tests; run on Linux to verify the full suite.
 
-Rqtn Tool 2.0 covers local JavaScript/inline/comment discovery, origin-bound
+WS-R 2.0 covers local JavaScript/inline/comment discovery, origin-bound
 cookies, explicit zero-candidate status, bounded parallel HTTP workers, shared
 pacing, SQL error baseline comparisons and repeated timing pairs, sensitive-file
 content signatures with soft-404 controls, security headers, Rich/plain output

@@ -1,4 +1,4 @@
-"""Rqtn Tool service inventory and high-impact exposure regression coverage."""
+"""WS-R service inventory and high-impact exposure regression coverage."""
 import contextlib
 import hashlib
 import io
@@ -14,7 +14,7 @@ import findings
 import nmap_scan
 import scope
 import terminal
-import webscan
+import cli
 
 
 class InventoryTests(unittest.TestCase):
@@ -62,8 +62,8 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([r['port'] for r in rows], [22, 80])
         self.assertEqual(details['status'], 'partial')
         self.assertTrue(details['xml_error'])
-        with self.assertRaises(webscan.ET.ParseError):
-            webscan.parse_nmap(self.xml, '127.0.0.1')
+        with self.assertRaises(cli.ET.ParseError):
+            cli.parse_nmap(self.xml, '127.0.0.1')
 
     def test_empty_missing_host_and_failure_are_distinct(self):
         for text, expected in (
@@ -77,7 +77,7 @@ class InventoryTests(unittest.TestCase):
     def test_url_top_ports_all_ports_and_version_command_are_explicit(self):
         for flags, expected in (([], ['--top-ports', '1000']), (['--url-port-only'], ['-p', '4280']), (['--top-ports', '2000'], ['--top-ports', '2000']),
                                 (['--all-ports'], ['-p', '1-65535']), (['--ports', '22,4280'], ['-p', '22,4280'])):
-            args = webscan.parser().parse_args(['https://lab.example:4280/', '--dry-run', *flags])
+            args = cli.parser().parse_args(['https://lab.example:4280/', '--dry-run', *flags])
             with patch.object(scope, 'resolve_one', side_effect=AssertionError('No DNS')):
                 scope.prepare_target(args)
             argv = nmap_scan.command(args, self.root)
@@ -85,37 +85,37 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(argv[argv.index('--version-intensity') + 1], '7')
             self.assertNotIn('--version-light', argv)
             self.assertEqual(args.url_only, '--url-port-only' in flags)
-        args = webscan.parser().parse_args(['::1', '--dry-run', '--version-intensity', '9'])
+        args = cli.parser().parse_args(['::1', '--dry-run', '--version-intensity', '9'])
         scope.prepare_target(args)
         self.assertIn('-6', nmap_scan.command(args, self.root))
 
     def test_conflicting_port_options_and_bad_intensity_are_rejected(self):
         for flags in (['--ports', '80', '--top-ports', '1000'], ['--top-ports', '1000', '--all-ports'], ['--version-intensity', '10']):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-                webscan.parser().parse_args(['127.0.0.1', *flags])
+                cli.parser().parse_args(['127.0.0.1', *flags])
 
     def test_plain_service_table_shows_unknown_and_detected_versions(self):
         self.xml.write_text(self.xml_text())
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
-            terminal.TerminalUI('plain').services_table(webscan.parse_nmap(self.xml, '127.0.0.1'))
+            terminal.TerminalUI('plain').services_table(cli.parse_nmap(self.xml, '127.0.0.1'))
         text = output.getvalue()
         self.assertIn('22/tcp open | ssh | OpenSSH 8.9 lab & fixture | probed', text)
         self.assertIn('80/tcp open | http | not identified | table', text)
 
     def test_cli_dry_run_records_port_selection_without_processes_or_http(self):
-        real_os = webscan.os
+        real_os = cli.os
         class PosixGuard:
             name = 'posix'
             def __getattr__(self, name):
                 return getattr(real_os, name)
         output = self.root / 'plan.json'
-        with patch.object(webscan, 'os', PosixGuard()), \
-             patch.object(webscan.subprocess, 'Popen', side_effect=AssertionError('No process')), \
-             patch.object(webscan, 'probe', side_effect=AssertionError('No HTTP')), \
+        with patch.object(cli, 'os', PosixGuard()), \
+             patch.object(cli.subprocess, 'Popen', side_effect=AssertionError('No process')), \
+             patch.object(cli, 'probe', side_effect=AssertionError('No HTTP')), \
              patch.object(scope, 'resolve_one', side_effect=AssertionError('No DNS')), \
              contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main(['http://127.0.0.1', '--dry-run', '--top-ports', '1000',
+            code = cli.main(['http://127.0.0.1', '--dry-run', '--top-ports', '1000',
                                  '--no-banner', '--output', str(output)])
         self.assertEqual(code, 0)
         document = json.loads(output.read_text())
@@ -124,7 +124,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(document['ports'], [])
 
     def test_cli_uses_inventory_and_partial_result_causes_coverage_exit(self):
-        real_os = webscan.os
+        real_os = cli.os
         class PosixGuard:
             name = 'posix'
             def __getattr__(self, name):
@@ -137,12 +137,12 @@ class InventoryTests(unittest.TestCase):
                         outputs=job.outputs, status='timeout', elapsed=1, note='fixture')
         output = self.root / 'partial.json'
         terminal_text = io.StringIO()
-        with patch.object(webscan, 'os', PosixGuard()), patch.object(webscan.Runner, 'execute', execute), \
-             patch.object(webscan, 'tool_paths', return_value={}), \
-             patch.object(webscan, 'probe', return_value=dict(url='http://127.0.0.1/', status=200, title='fixture')), \
+        with patch.object(cli, 'os', PosixGuard()), patch.object(cli.Runner, 'execute', execute), \
+             patch.object(cli, 'tool_paths', return_value={}), \
+             patch.object(cli, 'probe', return_value=dict(url='http://127.0.0.1/', status=200, title='fixture')), \
              contextlib.redirect_stdout(terminal_text):
-            code = webscan.main(['http://127.0.0.1', '--no-banner', '--ui', 'plain', '--enum', 'none',
-                                 '--no-crawl', '--no-auto-sqli', '--skip', *[t for t in webscan.ALL_TOOLS if t != 'nmap'],
+            code = cli.main(['http://127.0.0.1', '--no-banner', '--ui', 'plain', '--enum', 'none',
+                                 '--no-crawl', '--no-auto-sqli', '--skip', *[t for t in cli.ALL_TOOLS if t != 'nmap'],
                                  '--output', str(output)])
         self.assertEqual(code, 2)
         document = json.loads(output.read_text())
@@ -153,11 +153,11 @@ class InventoryTests(unittest.TestCase):
     def test_report_shows_plan_reason_and_service_metadata_escaped(self):
         summary = dict(target='127.0.0.1', created='fixture', mode='sequential', outcome='Plan only',
                        ports=[], probes=[], jobs=[], nmap=dict(status='planned', selection='TCP 80', note='Plan only: scan not executed'))
-        webscan.write_reports(self.root, summary)
+        cli.write_reports(self.root, summary)
         self.assertIn('scan not executed', (self.root / 'report.html').read_text())
         self.assertEqual(summary['coverage']['nmap_status'], 'planned')
         summary['ports'] = [dict(port=80, service='http', product='<script>bad</script>', version='1.2', cpe=['fixture'])]
-        webscan.write_reports(self.root, summary)
+        cli.write_reports(self.root, summary)
         report = (self.root / 'report.html').read_text()
         self.assertIn('&lt;script&gt;bad&lt;/script&gt;', report)
         self.assertEqual(summary['coverage']['identified_service_versions'], 1)

@@ -20,7 +20,7 @@ import assessment
 import crawler
 import nmap_scan
 import transport
-import webscan
+import cli
 from cli_fixture import cli_platform
 from scope import RequestGate
 
@@ -68,7 +68,7 @@ class AssessmentTests(unittest.TestCase):
         self.assertEqual(rows[1]['confidence'], 'port_convention_only')
 
     def test_service_script_allowlist_and_host_script_scope(self):
-        args = webscan.parser().parse_args(['127.0.0.1', '--service-checks', '--dry-run'])
+        args = cli.parser().parse_args(['127.0.0.1', '--service-checks', '--dry-run'])
         args.scan_ip = '127.0.0.1'
         cmd = nmap_scan.command(args, self.root)
         self.assertEqual(cmd[cmd.index('--script') + 1], 'ssh2-enum-algos,smb2-security-mode')
@@ -120,12 +120,12 @@ class AssessmentTests(unittest.TestCase):
         def execute(runner, job):
             return dict(name=job.name, tool=job.tool, argv=job.argv, folder=str(job.folder),
                         outputs=[], status='completed', elapsed=0, note='')
-        with patch.object(webscan.Runner, 'execute', execute), \
+        with patch.object(cli.Runner, 'execute', execute), \
              patch.object(nmap_scan, 'inventory', return_value=([dict(port=6379, service='redis')], {'status': 'completed', 'note': 'fixture'})), \
-             patch.object(webscan, 'probe', side_effect=AssertionError('No HTTP')), \
-             patch.object(webscan, 'tool_paths', side_effect=AssertionError('No optional scanners')), \
+             patch.object(cli, 'probe', side_effect=AssertionError('No HTTP')), \
+             patch.object(cli, 'tool_paths', side_effect=AssertionError('No optional scanners')), \
              contextlib.redirect_stdout(io.StringIO()):
-            code = webscan.main(['127.0.0.1', '--assessment', 'network', '--output', str(self.root)])
+            code = cli.main(['127.0.0.1', '--assessment', 'network', '--output', str(self.root)])
         self.assertEqual(code, 0)
         root = next(self.root.glob('*/summary.json')).parent
         data = json.loads((root / 'summary.json').read_text())
@@ -134,11 +134,11 @@ class AssessmentTests(unittest.TestCase):
         artifact = root / item['evidence'][0]['file']
         self.assertEqual(item['evidence'][0]['sha256'], hashlib.sha256(artifact.read_bytes()).hexdigest())
         with patch.object(assessment, 'run', side_effect=AssertionError('No network')), contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(webscan.main(['--report-only', str(root)]), 0)
+            self.assertEqual(cli.main(['--report-only', str(root)]), 0)
         rebuilt = json.loads((root / 'summary.json').read_text())
         self.assertEqual(rebuilt['findings'], data['findings'])
         report = (root / 'report.html').read_text()
-        digest = base64.b64encode(hashlib.sha256(webscan.REPORT_SCRIPT.encode()).digest()).decode()
+        digest = base64.b64encode(hashlib.sha256(cli.REPORT_SCRIPT.encode()).digest()).decode()
         self.assertIn("script-src 'sha256-" + digest + "'", report)
         self.assertIn('Redis service reachable', report)
         self.assertIn('id="finding-search"', report)
@@ -146,7 +146,7 @@ class AssessmentTests(unittest.TestCase):
     def test_network_without_inventory_does_not_claim_complete_coverage(self):
         cli_platform(self)
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(webscan.main(['127.0.0.1', '--assessment', 'network', '--skip', 'nmap', '--output', str(self.root)]), 2)
+            self.assertEqual(cli.main(['127.0.0.1', '--assessment', 'network', '--skip', 'nmap', '--output', str(self.root)]), 2)
 
     def test_slow_headers_and_body_obey_absolute_request_deadline(self):
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), SlowHandler)
@@ -156,7 +156,7 @@ class AssessmentTests(unittest.TestCase):
             for path in ('/headers', '/body'):
                 with self.subTest(path=path):
                     started = time.monotonic()
-                    row = webscan.probe(f'http://127.0.0.1:{server.server_port}{path}', timeout=0.25, scan_ip='127.0.0.1')
+                    row = cli.probe(f'http://127.0.0.1:{server.server_port}{path}', timeout=0.25, scan_ip='127.0.0.1')
                     self.assertIn('error', row)
                     if path == '/body':
                         self.assertEqual(row['status'], 200)  # Slow bodies must not erase a responding service.

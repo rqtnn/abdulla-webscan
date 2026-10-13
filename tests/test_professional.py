@@ -17,7 +17,7 @@ import evidence
 import findings
 import session
 import terminal
-import webscan
+import cli
 from cli_fixture import cli_platform
 
 
@@ -71,7 +71,7 @@ class ProfessionalTests(unittest.TestCase):
 
     def test_request_is_exact_when_no_redaction_was_needed(self):
         _, base = self.server()
-        row = webscan.probe(base + '/item?id=1', scan_ip='127.0.0.1')
+        row = cli.probe(base + '/item?id=1', scan_ip='127.0.0.1')
         self.assertTrue(row['request']['exact'])
         self.assertEqual(hashlib.sha256(row['request']['text'].encode('iso-8859-1')).hexdigest(), row['request']['sha256'])
         self.assertEqual(dict(row['headers'])['X-Lab'], 'fixture')
@@ -151,10 +151,10 @@ class ProfessionalTests(unittest.TestCase):
     def test_startup_brand_once_and_interactive_ipv6_parsing(self):
         cli_platform(self)
         output = io.StringIO()
-        with patch('builtins.input', return_value='::1'), patch.object(webscan, 'tool_paths', return_value={}), contextlib.redirect_stdout(output):
-            code = webscan.main(['--dry-run', '--no-crawl', '--ui', 'plain', '--output', str(self.root / 'plan.json')])
+        with patch('builtins.input', return_value='::1'), patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(output):
+            code = cli.main(['--dry-run', '--no-crawl', '--ui', 'plain', '--output', str(self.root / 'plan.json')])
         self.assertEqual(code, 0)
-        self.assertEqual(output.getvalue().count('RQTN TOOL'), 1)
+        self.assertEqual(output.getvalue().count('WS-R'), 1)
         self.assertIn('Findings', output.getvalue().replace('findings', 'Findings'))
         document = json.loads((self.root / 'plan.json').read_text())
         self.assertEqual(document['input_url'], 'http://[::1]/')
@@ -162,10 +162,10 @@ class ProfessionalTests(unittest.TestCase):
 
     def test_report_poc_is_escaped_and_offline_rebuild_keeps_stats(self):
         server, base = self.server()
-        row = webscan.probe(base, scan_ip='127.0.0.1')
+        row = cli.probe(base, scan_ip='127.0.0.1')
         row['request']['text'] += '<script>target-controlled</script>'
         summary = dict(target='127.0.0.1', created='fixture', mode='sequential', outcome='Local fixture', ports=[], probes=[row], jobs=[])
-        webscan.write_reports(self.root, summary)
+        cli.write_reports(self.root, summary)
         report = (self.root / 'report.html').read_text()
         self.assertIn('Unified triage matrix', report)
         self.assertIn('&lt;script&gt;target-controlled&lt;/script&gt;', report)
@@ -174,7 +174,7 @@ class ProfessionalTests(unittest.TestCase):
         reference = before['findings'][0]['evidence'][0]
         self.assertEqual(reference['sha256'], hashlib.sha256((self.root / reference['file']).read_bytes()).hexdigest())
         with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(webscan.main(['--report-only', str(self.root)]), 0)
+            self.assertEqual(cli.main(['--report-only', str(self.root)]), 0)
         after = json.loads((self.root / 'summary.json').read_text())
         self.assertEqual(before['risk_assessment'], after['risk_assessment'])
         self.assertEqual(before['statistics'], after['statistics'])
