@@ -229,7 +229,7 @@ print("TEST FIXTURE",name)
         env = dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
                    TEST_WEBSCAN_PORT=str(self.port))
         with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(io.StringIO()):
-            code = cli.main(["127.0.0.1", "--ports", str(self.port), "--enum", "all", "--mode", "parallel",
+            code = cli.main(["127.0.0.1", "--profile", "standard", "--ports", str(self.port), "--enum", "all", "--mode", "parallel",
                                  "--external-tools", "--retain-raw-evidence", "--templates", str(templates), "--output", str(self.root / "runs"), "--no-crawl",
                                  "--sqlmap-url", f"http://127.0.0.1:{self.port}/?id=1", "--sqlmap-param", "id"])
         self.assertEqual(code, 0)

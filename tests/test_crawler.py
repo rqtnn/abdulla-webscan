@@ -111,7 +111,7 @@ class CrawlerTests(unittest.TestCase):
 
     def test_offline_plan_and_disabled_crawl_do_not_fetch_or_spawn(self):
         for options in (['--dry-run'], ['--no-crawl']):
-            args = cli.parser().parse_args(['127.0.0.1', *options])
+            args = cli.parser().parse_args(['127.0.0.1', '--profile', 'standard', *options])
             summary = {'target': '127.0.0.1', 'jobs': []}
             with patch.object(crawler, 'fetch', side_effect=AssertionError('Unexpected fetch')):
                 cli.run_discovered(args, self.root, [self.base], summary, cli.Runner(True), {})
@@ -170,7 +170,7 @@ class CrawlerTests(unittest.TestCase):
         self.assertEqual(summary['injection']['status'], 'disabled')
 
     def test_interrupt_indexes_partial_crawl_evidence(self):
-        args = cli.parser().parse_args(['127.0.0.1'])
+        args = cli.parser().parse_args(['127.0.0.1', '--profile', 'standard'])
         summary = dict(target='127.0.0.1', jobs=[])
 
         def interrupted(*positional, **options):

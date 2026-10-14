@@ -136,7 +136,7 @@ class SecurityRegressions(unittest.TestCase):
         output = self.root / 'runs'
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            code = cli.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
+            code = cli.main([self.base, '--profile', 'standard', '--url', self.base + '/api/ping', '--skip', 'nmap',
                 '--no-crawl', '--no-auto-sqli', '--rate', '10', '--delay', '.12', '--output', str(output)])
         self.assertEqual(code, 0)
         self.assertEqual(len(Fixture.hits), 2)
@@ -198,7 +198,7 @@ class SecurityRegressions(unittest.TestCase):
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(cli, 'probe', return_value={'url': self.base, 'status': 429, 'title': '', 'retry_after': '30'}), \
              patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(io.StringIO()):
-            code = cli.main([self.base, '--url', self.base + '/api/ping', '--skip', 'nmap',
+            code = cli.main([self.base, '--profile', 'standard', '--url', self.base + '/api/ping', '--skip', 'nmap',
                 '--no-crawl', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         doc = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())
@@ -231,7 +231,7 @@ class SecurityRegressions(unittest.TestCase):
              patch.object(cli, 'tool_paths', return_value={'httpx': '/bin/false'}), \
              patch.object(cli.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \
              contextlib.redirect_stdout(io.StringIO()):
-            code = cli.main([self.base, '--external-tools', '--retain-raw-evidence', '--no-crawl',
+            code = cli.main([self.base, '--profile', 'standard', '--external-tools', '--retain-raw-evidence', '--no-crawl',
                 '--skip', 'nmap', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         document = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())
