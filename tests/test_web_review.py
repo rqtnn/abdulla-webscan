@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import checks
 import cli
+from cli_fixture import cli_platform
 from web_review import guide, nuclei_metadata
 
 
@@ -117,6 +118,7 @@ class WebReviewTests(unittest.TestCase):
             self.assertEqual(state['checks'][0]['outcome'], 'candidate')
 
     def test_web_profile_runs_through_cli_progress_wrapper(self):
+        cli_platform(self)
         server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
