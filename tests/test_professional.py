@@ -157,7 +157,9 @@ class ProfessionalTests(unittest.TestCase):
         self.assertEqual(output.getvalue().count('WS-R'), 1)
         self.assertIn('Findings', output.getvalue().replace('findings', 'Findings'))
         document = json.loads((self.root / 'plan.json').read_text())
-        self.assertEqual(document['input_url'], 'http://[::1]/')
+        self.assertEqual(document['input_url'], '')
+        self.assertEqual(document['input_target'], '::1')
+        self.assertEqual(document['target'], '::1')
         self.assertEqual(document['statistics']['hosts_assessed'], 0)
 
     def test_report_poc_is_escaped_and_offline_rebuild_keeps_stats(self):
