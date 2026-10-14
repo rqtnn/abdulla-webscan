@@ -78,7 +78,7 @@ class ScanModeTests(unittest.TestCase):
     def test_whatweb_only_cli_and_menu_launch_exactly_one_external_tool(self):
         cli_platform(self)
         for options in (['--only', 'whatweb', '--retain-raw-evidence'], ['--menu']):
-            with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()), \
+            with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as output, \
                     patch.object(cli.TerminalUI, 'prompt_scan', return_value=dict(scan='full',
                         only=['whatweb'], retain_raw_evidence=True)), \
                     patch('cli.probe', return_value=dict(url='http://127.0.0.1:8000/', status=200)), \
@@ -92,6 +92,47 @@ class ScanModeTests(unittest.TestCase):
                 summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
                 self.assertEqual([j['tool'] for j in summary['jobs']], ['whatweb'])
                 self.assertTrue(any(f['category'] == 'technology' for f in summary['findings']))
+                self.assertIn('[WHATWEB] http://127.0.0.1:8000/ | Lab | version: 1', output.getvalue())
+
+    def test_menu_is_vertical_and_accepts_arabic_digits(self):
+        ui = cli.TerminalUI('plain')
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), patch('builtins.input', return_value='٥'):
+            selection = ui.prompt_scan()
+        self.assertEqual(selection['only'], ['whatweb'])
+        lines = output.getvalue().splitlines()
+        for number in range(1, 9):
+            self.assertEqual(sum(line.startswith(str(number) + ' ') for line in lines), 1)
+        self.assertNotIn(' | ', output.getvalue())
+
+    def test_whatweb_empty_missing_and_failed_output_is_explicit(self):
+        ui = cli.TerminalUI('plain')
+        cases = [([], 'No job started'),
+            ([dict(tool='whatweb', status='skipped', note='whatweb is not installed/on PATH.')], 'sudo apt install whatweb'),
+            ([dict(tool='whatweb', status='failed', note='See console.log', folder='/run/whatweb')], '/run/whatweb/console.log'),
+            ([dict(tool='whatweb', status='completed', name='WhatWeb')], 'No technology fingerprints parsed')]
+        for jobs, message in cases:
+            with self.subTest(message=message), contextlib.redirect_stdout(io.StringIO()) as output:
+                ui.whatweb_results(dict(jobs=jobs, findings=[]))
+                self.assertIn(message, output.getvalue())
+
+    def test_interactive_bare_ip_discovers_https_for_whatweb(self):
+        cli_platform(self)
+        probes = []
+        def https_only(url, *args, **kwargs):
+            probes.append(url)
+            return dict(url=url, status=200) if url == 'https://127.0.0.1:443/' else dict(url=url, error='closed')
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()), \
+                patch.object(cli.TerminalUI, 'prompt_target', return_value='127.0.0.1'), \
+                patch('builtins.input', return_value='5'), \
+                patch('cli.probe', side_effect=https_only), \
+                patch('cli.shutil.which', return_value='/fake/whatweb'), \
+                patch.object(cli.Runner, 'execute', side_effect=self.execute) as execute:
+            cli.main(['--menu', '--output', tmp, '--log-file', tmp + '/log'])
+            self.assertIn('https://127.0.0.1:443/', probes)
+            self.assertEqual(execute.call_count, 1)
+            self.assertEqual(execute.call_args.args[0].tool, 'whatweb')
+            self.assertIn('https://127.0.0.1:443/', execute.call_args.args[0].argv)
 
     def test_comparison_uses_stable_identity_and_does_not_claim_fixed(self):
         row = dict(id='1', category='scanner_match', check='sql-error:q', url='http://127.0.0.1/?q=1',
