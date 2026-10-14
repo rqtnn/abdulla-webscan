@@ -100,7 +100,7 @@ class LabTests(unittest.TestCase):
         updated = json.loads((self.root / 'summary.json').read_text())
         self.assertEqual(updated['version'], '1.2.0')
         self.assertEqual(updated['report_generator_version'], cli.VERSION)
-        self.assertEqual(updated['report_schema_version'], 3)
+        self.assertEqual(updated['report_schema_version'], 4)
 
 
 if __name__ == '__main__':
