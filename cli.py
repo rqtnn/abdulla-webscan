@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import web_review
+import scan_modes
+import run_history
 import base64
 import concurrent.futures
 import dataclasses
@@ -100,7 +102,7 @@ def export_reports(root, destination):
         destination.write_text(json.dumps(document, indent=2, ensure_ascii=False), encoding='utf-8')
     else:
         document = (root / 'report.html').read_text(encoding='utf-8')
-        document = re.sub(r'href="([^"#]+)"', lambda match: 'href="' +
+        document = re.sub(r'href="([^"#]+)"', lambda match: match[0] if urllib.parse.urlsplit(html.unescape(match[1])).scheme or match[1].startswith('//') else 'href="' +
             html.escape(urllib.parse.quote(prefix, safe='/') + '/' + html.unescape(match[1]), quote=True) + '"', document)
         destination.write_text(document, encoding='utf-8')
     return destination
@@ -304,11 +306,12 @@ class Runner:
         return record
 
 
-def tool_paths(dry_run=False):
-    found = {name: shutil.which(name) for name in ALL_TOOLS}
+def tool_paths(dry_run=False, selected=None):
+    found = {name: shutil.which(name) for name in ALL_TOOLS if selected is None or name in selected}
     # Kali names ProjectDiscovery's executable httpx-toolkit, to avoid Python HTTPX.
-    found["httpx"] = shutil.which("httpx-toolkit") or found["httpx"]
-    if found["httpx"] and not dry_run:
+    if "httpx" in found:
+        found["httpx"] = shutil.which("httpx-toolkit") or found["httpx"]
+    if found.get("httpx") and not dry_run:
         try:
             check = subprocess.run([found["httpx"], "-h"], capture_output=True, timeout=10, text=True)
             help_text = check.stdout + check.stderr
@@ -489,7 +492,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
         except Exception as exc:
             summary['sensitive_files'] = dict(status='incomplete', error=stage_failure(
                 summary, root, 'Sensitive file stage', 'checks', exc))
-    if args.profile == 'web' and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
+    if (args.profile == 'web' or getattr(args, 'cors_checks', False)) and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
         cors_folder = root / 'cors'
         started = time.monotonic()
         try:
@@ -710,6 +713,13 @@ def write_reports(root, summary):
         not any(p.get('kind') in ('http', 'nmap_service', 'tls_handshake') and p.get('status') in ('captured', 'observed')
                 for e in f.get('evidence', []) for p in e.get('poc', [])) for f in summary['findings'])
     summary['report_schema_version'] = 4
+    run_history.export_csv(root / 'findings.csv', summary['findings'])
+    if summary.get('comparison_base'):
+        try:
+            summary['comparison'] = run_history.compare(summary, run_history.load(summary['comparison_base']))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            summary['comparison'] = dict(status='incomplete', error=type(exc).__name__)
+        (root / 'comparison.json').write_text(evidence.dumps(summary['comparison']), encoding='utf-8')
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
@@ -797,6 +807,8 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
 <p>Assessment: {esc(summary.get('assessment_mode', 'web'))} · Version: {esc(summary.get('version', 'legacy'))}</p>
 <nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a><a href="#how-to-exploit">How to exploit / CVE</a></nav>
 <div class="cards">{cards}</div>
+<h2>Scan plan</h2><pre>{esc(json.dumps(summary.get('scan_plan', {}), indent=2))}</pre><p><a href="findings.csv">Export findings CSV</a></p>
+<h2>Run comparison</h2><details><summary>Changes from baseline (not proof of remediation)</summary><pre>{esc(json.dumps(summary.get('comparison', {'status': 'not_requested'}), indent=2))}</pre></details>
 <h2>Assessment statistics</h2><table>{statistics_rows}</table>
 <h2>Advanced API and context inventory</h2><details><summary>API routes, access matrix and JWT structure analysis</summary>
 <pre>{esc(json.dumps(summary.get('advanced', {'status': 'not_run'}), indent=2, ensure_ascii=False))}</pre></details>
@@ -848,6 +860,12 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 def parser():
     p = argparse.ArgumentParser(description="WS-R: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
+    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port'), default='full', help='Choose a named scan plan.')
+    p.add_argument('--only', nargs='+', choices=scan_modes.TOOLS, help='Run only selected tools; checks/SQLmap use crawl for GET discovery. External tools require --retain-raw-evidence.')
+    menu = p.add_mutually_exclusive_group()
+    menu.add_argument('--menu', action='store_true', help='Show scan choices after the target.')
+    menu.add_argument('--no-menu', action='store_true', help='Use command-line options without an interactive scan menu.')
+    p.add_argument('--compare', type=Path, help='Previous summary.json or run directory for a same-target offline comparison.')
     p.add_argument('--target', dest='target_option', type=target_input, help='Alternative to the positional target.')
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
     p.add_argument('--profile', choices=('standard', 'lab', 'web'), default='web',
@@ -941,6 +959,11 @@ def _main(argv=None):
                 job = next((j for j in summary['jobs'] if j['name'] == candidate.get('job')), None)
                 if job:
                     candidate['detection_outcome'] = sqlmap_outcome(job)
+            if args.compare:
+                previous = run_history.load(args.compare)
+                if previous['target'] != summary['target']:
+                    raise ValueError('Baseline target differs from this run')
+                summary['comparison_base'] = str(args.compare.expanduser().resolve())
             summary['report_generator_version'] = VERSION
             write_reports(root, summary)
             if args.output.suffix.lower() in ('.json', '.html'):
@@ -968,6 +991,20 @@ def _main(argv=None):
             args.target = parsed.url or 'http://' + authority(parsed.host) + '/'
         except (ValueError, argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
+    try:
+        interactive = sys.stdin.isatty() and sys.stdout.isatty()
+        if args.menu or (interactive and not args.no_menu and not args.dry_run and not args.only
+                        and not any(v == '--scan' or v.startswith('--scan=') for v in argv)):
+            if args.only:
+                raise ValueError('Use --menu or --only, not both')
+            selection = UI.prompt_scan()
+            if selection.get('ports') is not None:
+                selection['ports'] = ports(selection['ports'])
+            for key, value in selection.items():
+                setattr(args, key, value)
+        scan_modes.apply(args, argv)
+    except (ValueError, EOFError, argparse.ArgumentTypeError) as exc:
+        p.error(str(exc))
     if sum(bool(v) for v in (args.ports, args.all_ports, args.top_ports)) > 1:
         p.error('Use only one of --ports, --all-ports or --top-ports.')
     if args.top_ports and args.top_ports > 65535 or args.nmap_rate > 1000:
@@ -1018,7 +1055,9 @@ def _main(argv=None):
                 raise ValueError("The SQLmap parameter must exist in the URL query string.")
     except (ValueError, OSError, argparse.ArgumentTypeError) as exc:
         p.error(str(exc))
-    if args.external_tools and not args.retain_raw_evidence:
+    if args.only and args.external_tools and args.session:
+        p.error('Selected external tools do not inherit account credentials; use built-in tools for cookie-scoped scans.')
+    if args.external_tools and not args.retain_raw_evidence and not args.dry_run:
         p.error('--external-tools requires --retain-raw-evidence because scanners write raw responses.')
     if not args.external_tools and not args.dry_run:
         args.skip = list(dict.fromkeys(args.skip + [t for t in ALL_TOOLS if t != 'nmap']))
@@ -1048,6 +1087,15 @@ def _main(argv=None):
                                'time_checks_workers': 1 if args.time_sqli else None}
     summary['external_scanners'] = {'enabled': args.external_tools,
         'policy': 'Numeric IP targets only; explicit raw-evidence opt-in; serialized jobs with per-tool pacing.'}
+    summary['scan_plan'] = scan_modes.plan(args)
+    if args.compare:
+        try:
+            previous = run_history.load(args.compare)
+            if previous['target'] != args.target:
+                raise ValueError('Baseline target differs from the selected target')
+            summary['comparison_base'] = str(args.compare.expanduser().resolve())
+        except (OSError, ValueError) as exc:
+            p.error(str(exc))
     summary['assessment_mode'] = args.assessment
     summary['service_checks_requested'] = args.service_checks
     summary['built_in_http']['request_timeout'] = args.http_timeout
@@ -1074,6 +1122,8 @@ def _main(argv=None):
             UI.services_table(summary['ports'], summary['nmap']['note'])
         # If Nmap is absent/failed, only try common ports within a requested port scope.
         fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
+        if args.only and not args.ports and not args.input_url and not summary['ports']:
+            fallback = [80, 443]
         services = summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback]
         base_urls = [url.rstrip('/') + '/' for url in args.url]
         if args.input_url:
@@ -1082,7 +1132,7 @@ def _main(argv=None):
         # guessing many unrelated ports after skipped/failed Nmap.
         derived_urls = candidates(args.target, services) if (summary['ports'] or not args.input_url) and not args.url_only else []
         candidate_urls = list(dict.fromkeys(base_urls + derived_urls))
-        if args.assessment != 'web' and not args.dry_run and not runner.stop.is_set():
+        if args.assessment != 'web' and (not args.only or 'tls' in args.only) and not args.dry_run and not runner.stop.is_set():
             say('[NETWORK] Reviewing service exposure and verified TLS; no login or exploit probes')
             started = time.monotonic()
             folder = root / 'network'
@@ -1135,7 +1185,7 @@ def _main(argv=None):
             if not args.external_tools:
                 say('[WEB] Built-in discovery/checks enabled; external web scanners are opt-in (--external-tools --retain-raw-evidence) for numeric IP targets.')
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
-        binaries = tool_paths(args.dry_run) if not runner.stop.is_set() and args.assessment != 'network' else {}
+        binaries = tool_paths(args.dry_run, args.only) if not runner.stop.is_set() and args.assessment != 'network' else {}
         jobs = build_jobs(args, root, live, binaries)
         summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
         try:

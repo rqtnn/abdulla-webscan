@@ -1,3 +1,12 @@
+## 3.2.0 - Scan selection and history
+
+- Add a post-target terminal menu and CLI-only tool selection with strict stage isolation.
+- Add full/web/quick/specific-port plans and preserve explicitly supplied budgets.
+- Add same-target baseline comparisons with conservative not-observed labels.
+- Export spreadsheet-safe CSV findings from the normalized evidence.
+- Preserve external advisory URLs when exporting HTML reports.
+- Test isolated Nmap/WhatWeb runs, menu selections, offline comparison and CSV redaction.
+
 ## 3.1.1 - Continue checks after crawling
 
 - Make the web profile the default for normal startup; keep explicit standard mode.

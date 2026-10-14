@@ -1,3 +1,56 @@
+## Scan selection and history (3.2.0)
+
+Run `python ws_r.py` in a terminal, enter the target, then choose a scan:
+
+1. Full assessment
+2. Web assessment on ports 80/443
+3. Quick assessment (top 100 ports, light service probes and smaller web budgets)
+4. Nmap only (no HTTP discovery, crawling, TLS or other scanners)
+5. WhatWeb only (HTTP reachability discovery plus WhatWeb, no Nmap or crawler)
+6. Crawl only
+7. Individual tools (comma or space separated)
+8. Specific TCP port(s)
+
+Use `--menu` to request the menu explicitly or `--no-menu` for scripted runs.
+When stdin/stdout are not terminals, the CLI remains noninteractive. Selecting an
+external tool in the menu explicitly retains its raw scanner output; the menu
+labels this before selection. Built-in checks omit response bodies by default.
+Missing executables are reported as skipped, not replaced with a different scanner.
+The existing numeric-IP restriction on external scanners remains in force.
+
+```bash
+python ws_r.py 192.168.56.101 --only nmap
+python ws_r.py http://192.168.56.101:8080/ --only whatweb --retain-raw-evidence
+python ws_r.py 192.168.56.101 --only nmap whatweb --retain-raw-evidence
+python ws_r.py https://your-authorized-site.example --only crawl
+python ws_r.py 192.168.56.101 --scan quick
+python ws_r.py 192.168.56.101 --scan port --ports 443
+python ws_r.py http://192.168.56.101:8080/ --only checks
+```
+
+`--only checks` and `--only sqlmap` retain crawling as a declared dependency to
+find eligible GET parameters. Other built-in stages and unselected scanners are
+disabled. A web scanner still requires HTTP discovery to find responding URLs.
+Quick-mode defaults do not override explicit budgets/port selections.
+
+Each report directory now includes `findings.csv`. Spreadsheet formula prefixes
+are escaped, query secrets are redacted, and CVE advisory links remain valid when
+HTML reports are exported to another folder.
+
+```bash
+# Compare a new same-host run with a previous report directory or summary.json
+python ws_r.py 192.168.56.101 --compare results/PREVIOUS_RUN
+# Rebuild and compare offline without scanning anything
+python ws_r.py --report-only results/CURRENT_RUN --compare results/PREVIOUS_RUN
+```
+
+Comparisons appear in HTML/JSON and `comparison.json`: new findings, severity/status
+changes, findings not observed this time, and port inventory differences. Missing
+observations are not labeled fixed; different tool selections, timeouts, port
+scope and account contexts can change coverage. Review the scan plan and gaps.
+
+See [Sn1per comparison](SN1PER_COMPARISON.md) for the source-backed design comparison.
+
 ## Pipeline continuation (3.1.1)
 
 Normal startup now uses `--profile web` by default. The previous default profile

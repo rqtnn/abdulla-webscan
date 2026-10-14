@@ -25,6 +25,31 @@ class TerminalUI:
         prompt = 'Target URL/IP (e.g. http://127.0.0.1:3000): '
         return self.console.input(prompt) if self.console else input(prompt)
 
+    def prompt_scan(self):
+        from scan_modes import TOOLS, EXTERNAL
+        self.message('Choose scan after entering the target:')
+        self.message('1 Full assessment | 2 Web (80/443) | 3 Quick assessment')
+        self.message('4 Nmap only | 5 WhatWeb only | 6 Crawl only')
+        self.message('7 Choose individual tools | 8 Specific port')
+        self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
+        def ask(text):
+            return self.console.input(text) if self.console else input(text)
+        choice = ask('Scan choice [1]: ').strip() or '1'
+        if choice in ('1', '2', '3'):
+            return {'scan': {'1': 'full', '2': 'web', '3': 'quick'}[choice], 'only': None}
+        if choice in ('4', '5', '6'):
+            tool = {'4': 'nmap', '5': 'whatweb', '6': 'crawl'}[choice]
+            return {'scan': 'full', 'only': [tool], 'retain_raw_evidence': tool in EXTERNAL}
+        if choice == '7':
+            self.message('Available: ' + ', '.join(TOOLS))
+            selected = list(dict.fromkeys(ask('Tools (comma or space separated): ').replace(',', ' ').split()))
+            if not selected or any(tool not in TOOLS for tool in selected):
+                raise ValueError('Select one or more listed tool names')
+            return {'scan': 'full', 'only': selected, 'retain_raw_evidence': bool(set(selected) & set(EXTERNAL))}
+        if choice == '8':
+            return {'scan': 'port', 'only': None, 'ports': ask('TCP port(s), e.g. 443 or 80,443: ').strip()}
+        raise ValueError('Choose a scan number from 1 to 8')
+
     def completion(self, statistics, priority):
         self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '
                      'Open TCP ports={open_ports} | Candidate vulnerabilities={vulnerability_candidates} | '
