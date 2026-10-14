@@ -1,3 +1,27 @@
+## All-port menu choice (3.2.2)
+
+WhatWeb-only now prints a dedicated **WHATWEB RESULTS** section with technologies,
+versions and server metadata, plus explicit missing/failed/empty diagnostics.
+It does not print the vulnerability Severity table. Redirects are explicitly
+disabled using the documented WhatWeb option.
+
+Choice **8** scans TCP ports **1-65535** with Nmap service detection, displays the
+observed open ports, then assesses discovered HTTP(S) services including unusual
+ports. Choice **9** retains manual port selection. Choice **2** is the explicitly
+restricted 80/443 web plan. All-port mode defaults to a 3600-second Nmap budget;
+explicit `--nmap-timeout` values are preserved. Missing Nmap or incomplete scans
+remain coverage gaps; no common ports are invented as observed results.
+
+```bash
+python ws_r.py 192.168.56.101 --scan all-ports
+```
+
+Linux CI installs WhatWeb and verifies its real executable against an isolated
+loopback HTTP fixture, including JSON parsing and terminal server/title output.
+
+All-port discovery takes longer. This scans TCP, not UDP. HTTP checks apply to
+identified web services; non-web services remain in the port/service inventory.
+
 ## Menu and WhatWeb output (3.2.1)
 
 Menu numbers now appear one per line; both `5` and `٥` select WhatWeb. Its parsed
@@ -18,7 +42,8 @@ Run `python ws_r.py` in a terminal, enter the target, then choose a scan:
 5. WhatWeb only (HTTP reachability discovery plus WhatWeb, no Nmap or crawler)
 6. Crawl only
 7. Individual tools (comma or space separated)
-8. Specific TCP port(s)
+8. All TCP ports (1-65535), then web assessment on discovered HTTP(S) services
+9. Specific TCP port(s)
 
 Use `--menu` to request the menu explicitly or `--no-menu` for scripted runs.
 When stdin/stdout are not terminals, the CLI remains noninteractive. Selecting an

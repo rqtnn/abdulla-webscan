@@ -384,7 +384,7 @@ def build_jobs(args, root, urls, binaries):
                 "ProjectDiscovery httpx/httpx-toolkit not found; Python HTTPX is a different tool."
                 if not binaries.get("httpx") and not args.dry_run else "")
         if "whatweb" not in args.skip:
-            add("whatweb", lambda f: ["-a", "1", "--max-redirects=0", "--color=never",
+            add("whatweb", lambda f: ["-a", "1", "--follow-redirect=never", "--color=never",
                                      "--log-json=" + str(f / "results.json"), url], ["results.json"])
         for tool in enum_names:
             if tool in args.skip:
@@ -860,7 +860,7 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 def parser():
     p = argparse.ArgumentParser(description="WS-R: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
-    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port'), default='full', help='Choose a named scan plan.')
+    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports'), default='full', help='Choose a named scan plan.')
     p.add_argument('--only', nargs='+', choices=scan_modes.TOOLS, help='Run only selected tools; checks/SQLmap use crawl for GET discovery. External tools require --retain-raw-evidence.')
     menu = p.add_mutually_exclusive_group()
     menu.add_argument('--menu', action='store_true', help='Show scan choices after the target.')
@@ -1102,6 +1102,10 @@ def _main(argv=None):
     summary['session_scope'] = ('Built-in crawler and GET checks only; external scanners are unauthenticated; '
         'automatic SQLmap and discovered Nuclei deferred' if args.session else 'unauthenticated')
     say(f"Target: {args.target} | Assessment: {args.assessment} | {args.mode}\nResults: {root}")
+    if args.only == ['whatweb'] and not args.dry_run:
+        say('[WHATWEB] Selected: fingerprinting only. Results will appear under WHATWEB RESULTS.')
+        if not shutil.which('whatweb'):
+            say('[WHATWEB] Missing executable. Install on Kali/Ubuntu/WSL: sudo apt install whatweb')
     summary['nmap'] = dict(status='skipped', selection=nmap_scan.selection(args),
                            note='Nmap was excluded with --skip; no observed port inventory.')
     if args.dry_run:
@@ -1124,7 +1128,7 @@ def _main(argv=None):
         fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
         if args.only and not args.ports and not args.input_url and not summary['ports']:
             fallback = [80, 443]
-        services = summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback]
+        services = summary["ports"] if args.scan == 'all-ports' else (summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback])
         base_urls = [url.rstrip('/') + '/' for url in args.url]
         if args.input_url:
             base_urls.insert(0, args.input_url)
@@ -1241,8 +1245,9 @@ def _main(argv=None):
                         say('[REPRODUCE] ' + finding['reproduction'])
             if not args.dry_run and ('whatweb' in (args.only or []) or any(j.get('tool') == 'whatweb' for j in summary['jobs'])):
                 UI.whatweb_results(summary)
-            UI.severity_table(summary['coverage']['severity_counts'])
-            UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
+            if args.only != ['whatweb']:
+                UI.severity_table(summary['coverage']['severity_counts'])
+                UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")
         except Exception as exc:
             summary['report_error'] = reliability.record('report_finalization', exc)

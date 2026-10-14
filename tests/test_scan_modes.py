@@ -2,6 +2,10 @@ import contextlib
 import csv
 import io
 import json
+import http.server
+import os
+import shutil
+import threading
 from pathlib import Path
 import tempfile
 import unittest
@@ -54,7 +58,7 @@ class ScanModeTests(unittest.TestCase):
                 '</ports></host><runstats><finished exit="success"/></runstats></nmaprun>')
         elif job.tool == 'whatweb':
             (job.folder / 'results.json').write_text(json.dumps([{'target': 'http://127.0.0.1:8000/',
-                'plugins': {'Lab': {'version': ['1']}}}]))
+                'plugins': {'Lab': {'version': ['1']}, 'HTTPServer': {'string': ['fixture-server']}}}]))
         else:
             self.fail('Unselected tool started: ' + job.tool)
         return dict(name=job.name, tool=job.tool, folder=str(job.folder), argv=job.argv,
@@ -92,7 +96,11 @@ class ScanModeTests(unittest.TestCase):
                 summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
                 self.assertEqual([j['tool'] for j in summary['jobs']], ['whatweb'])
                 self.assertTrue(any(f['category'] == 'technology' for f in summary['findings']))
+                self.assertIn('[WHATWEB RESULTS]', output.getvalue())
+                self.assertIn('HTTPServer | fixture-server', output.getvalue())
                 self.assertIn('[WHATWEB] http://127.0.0.1:8000/ | Lab | version: 1', output.getvalue())
+                self.assertNotIn('Unvalidated severity groups:', output.getvalue())
+                self.assertIn('--follow-redirect=never', execute.call_args.args[0].argv)
 
     def test_menu_is_vertical_and_accepts_arabic_digits(self):
         ui = cli.TerminalUI('plain')
@@ -101,9 +109,50 @@ class ScanModeTests(unittest.TestCase):
             selection = ui.prompt_scan()
         self.assertEqual(selection['only'], ['whatweb'])
         lines = output.getvalue().splitlines()
-        for number in range(1, 9):
+        for number in range(1, 10):
             self.assertEqual(sum(line.startswith(str(number) + ' ') for line in lines), 1)
         self.assertNotIn(' | ', output.getvalue())
+
+    def test_menu_all_ports_and_manual_ports_have_distinct_scopes(self):
+        ui = cli.TerminalUI('plain')
+        with contextlib.redirect_stdout(io.StringIO()), patch('builtins.input', return_value='٨') as ask:
+            selection = ui.prompt_scan()
+            self.assertEqual(ask.call_count, 1)
+        args = self.args(['127.0.0.1', '--scan', selection['scan']])
+        self.assertTrue(args.all_ports)
+        self.assertIsNone(args.ports)
+        self.assertEqual(args.nmap_timeout, 3600)
+        self.assertEqual(self.args(['127.0.0.1', '--scan', 'all-ports', '--nmap-timeout', '120']).nmap_timeout, 120)
+        with contextlib.redirect_stdout(io.StringIO()), patch('builtins.input', side_effect=['9', '8080,8443']):
+            self.assertEqual(ui.prompt_scan()['ports'], '8080,8443')
+        for restricted in (['--ports', '80,443'], ['--url-port-only'], ['--skip', 'nmap']):
+            with self.assertRaises(ValueError):
+                self.args(['127.0.0.1', '--scan', 'all-ports', *restricted])
+
+    def test_all_ports_follow_up_uses_unusual_web_service_not_only_80_443(self):
+        cli_platform(self)
+        def inventory_job(job):
+            self.assertEqual(job.tool, 'nmap')
+            self.assertEqual(job.argv[job.argv.index('-p') + 1], '1-65535')
+            job.folder.mkdir(parents=True)
+            (job.folder / 'services.xml').write_text('<nmaprun><host><address addr="127.0.0.1"/><ports>'
+                '<port protocol="tcp" portid="22"><state state="open"/><service name="ssh"/></port>'
+                '<port protocol="tcp" portid="18081"><state state="open"/><service name="http"/></port>'
+                '</ports></host><runstats><finished exit="success"/></runstats></nmaprun>')
+            return dict(name=job.name, tool=job.tool, argv=job.argv, folder=str(job.folder),
+                status='completed', outputs=job.outputs, elapsed=0, note='')
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()), \
+                patch.object(cli.Runner, 'execute', side_effect=inventory_job), \
+                patch('cli.probe', side_effect=lambda url, *a, **k: dict(url=url, status=200)) as probe, \
+                patch('cli.assessment.run', return_value=dict(status='completed', checks=[])), \
+                patch('cli.crawl', side_effect=AssertionError('crawl disabled')):
+            code = cli.main(['127.0.0.1', '--scan', 'all-ports', '--profile', 'standard',
+                '--no-crawl', '--output', tmp, '--log-file', tmp + '/log'])
+            self.assertEqual(code, 0)
+            urls = [call.args[0] for call in probe.call_args_list]
+            self.assertEqual(set(urls), {'http://127.0.0.1:18081/', 'https://127.0.0.1:18081/'})
+            summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
+            self.assertEqual([row['port'] for row in summary['ports']], [22, 18081])
 
     def test_whatweb_empty_missing_and_failed_output_is_explicit(self):
         ui = cli.TerminalUI('plain')
@@ -133,6 +182,39 @@ class ScanModeTests(unittest.TestCase):
             self.assertEqual(execute.call_count, 1)
             self.assertEqual(execute.call_args.args[0].tool, 'whatweb')
             self.assertIn('https://127.0.0.1:443/', execute.call_args.args[0].argv)
+
+    @unittest.skipUnless(os.name == 'posix' and shutil.which('whatweb'), 'Requires installed WhatWeb (Linux CI installs it)')
+    def test_real_whatweb_binary_fingerprints_loopback_and_prints_results(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            server_version = 'WSRFixture/1.0'
+            def do_GET(self):
+                body = b'<html><head><title>WSR WhatWeb Fixture</title></head><body>local test</body></html>'
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()) as output:
+                code = cli.main([f'http://127.0.0.1:{server.server_port}/', '--only', 'whatweb',
+                    '--retain-raw-evidence', '--tool-timeout', '60', '--ui', 'plain',
+                    '--output', tmp, '--log-file', tmp + '/log'])
+                summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
+                self.assertEqual(code, 0, summary['jobs'])
+                self.assertEqual([job['status'] for job in summary['jobs']], ['completed'])
+                self.assertIn('HTTPServer | WSRFixture/1.0', output.getvalue())
+                self.assertIn('Title | WSR WhatWeb Fixture', output.getvalue())
+                self.assertIn('[WHATWEB RESULTS]', output.getvalue())
+                self.assertNotIn('Unvalidated severity groups:', output.getvalue())
+        finally:
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=2)
 
     def test_comparison_uses_stable_identity_and_does_not_claim_fixed(self):
         row = dict(id='1', category='scanner_match', check='sql-error:q', url='http://127.0.0.1/?q=1',

@@ -1,3 +1,11 @@
+## 3.2.2 - All-port discovery and dedicated WhatWeb output
+
+- Make choice 8 scan TCP 1-65535 and assess discovered web services.
+- Move manual port selection to choice 9.
+- Print dedicated WhatWeb technology/server output instead of a severity table in WhatWeb-only mode.
+- Use the documented WhatWeb redirect policy and print missing-binary guidance.
+- Preserve explicit Nmap budgets and show incomplete inventory without common-port fallback.
+
 ## 3.2.1 - Visible scan menu and WhatWeb results
 
 - Display each menu option on its own line and accept Arabic numerals.

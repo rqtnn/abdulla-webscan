@@ -15,7 +15,13 @@ def apply(args, argv):
         raise ValueError('The same tool cannot be selected with --only and --skip')
     if chosen and args.scan != 'full':
         raise ValueError('Use --only or --scan; do not combine separate scan plans')
-    if args.scan == 'web':
+    if args.scan == 'all-ports':
+        if args.ports or args.top_ports or args.url_port_only or 'nmap' in args.skip:
+            raise ValueError('All-port discovery requires Nmap without a restricted port selection')
+        args.all_ports = True
+        args.assessment = 'full'
+        default(args, argv, 'nmap_timeout', 3600)
+    elif args.scan == 'web':
         args.assessment = 'web'
         if not any((args.ports, args.all_ports, args.top_ports, args.url_port_only)):
             args.ports = '80,443'
