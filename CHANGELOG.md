@@ -1,3 +1,12 @@
+## 3.1.0 - Web findings and reproduction
+
+- Add a web profile with bounded CORS, sensitive-file, API and GET parameter checks.
+- Preserve Nuclei CVE classification and references independently of raw evidence.
+- Add a final How to exploit section with control/probe GET commands and validation steps.
+- Continue sensitive-file checks on other origins after a baseline request fails.
+- Recheck cancellation and remaining budgets before crawler/file HTTP requests.
+- Add local regression coverage for CVE reports, CORS and partial-origin failures.
+
 ## 3.0.0 — WS-R
 
 - Rename launchers, tests, HTTP identity and documentation; one minimal banner.

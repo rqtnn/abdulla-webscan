@@ -6,6 +6,7 @@ External scanners stay external: this script schedules them and records evidence
 from __future__ import annotations
 
 import argparse
+import web_review
 import base64
 import concurrent.futures
 import dataclasses
@@ -33,7 +34,7 @@ import xml.etree.ElementTree as ET
 from findings import collect
 from crawler import crawl, select_candidates, origin
 from scope import parse_target, prepare_target, normalize_url, authority
-from checks import run_checks, run_sensitive_files
+from checks import run_checks, run_sensitive_files, run_cors
 from scope import RequestGate
 from terminal import TerminalUI, BANNER
 from findings import finding_groups, sqlmap_outcome
@@ -333,6 +334,12 @@ def template_path(args):
 
 
 def apply_profile(args, argv):
+    if args.profile == 'web':
+        args.active_checks = not args.no_active_checks
+        args.builtin_sqli = not args.no_active_checks
+        args.sensitive_files = True
+        args.api_discovery = True
+        return
     if args.profile != 'lab':
         return
     defaults = {'crawl_pages': 300, 'crawl_depth': 5, 'crawl_timeout': 600,
@@ -455,6 +462,16 @@ def run_discovered(args, root, live, summary, runner, binaries):
                             'selected': [], 'excluded': []}
     if args.sensitive_files and not args.dry_run and not runner.stop.is_set() and live:
         run_file_stage(args, root, live, summary, runner)
+    if args.profile == 'web' and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
+        cors_folder = root / 'cors'
+        started = time.monotonic()
+        summary['cors'] = with_progress('Checking CORS origins', run_cors, live, args.target, cors_folder, runner.stop,
+            gate=getattr(args, 'request_gate', None), timeout=args.checks_timeout, request_timeout=args.http_timeout,
+            scan_ip=getattr(args, 'scan_ip', None), session=getattr(args, 'session', None),
+            insecure=args.insecure, retain_raw=args.retain_raw_evidence)
+        summary['jobs'].append(dict(name='CORS origin comparisons', tool='checks', argv=[],
+            command='GET control and two inert Origin headers', folder=str(cors_folder), outputs=['checks.json'],
+            status=summary['cors']['status'], elapsed=round(time.monotonic() - started, 2), note='Browser impact requires validation.'))
     if args.no_crawl or args.dry_run or runner.stop.is_set() or not live:
         if args.dry_run:
             summary['injection']['status'] = 'planned_after_discovery' if not args.no_auto_sqli else 'disabled'
@@ -579,6 +596,11 @@ def write_reports(root, summary):
             finding.setdefault('reproduction', advanced.curl_helper(finding['url']))
     ranks = {'critical': 0, 'high': 1, 'medium': 2, 'low': 3, 'info': 4, 'unknown': 5}
     summary['findings'].sort(key=lambda f: (ranks.get(str(f['severity']).lower(), 5), f['url'], f['check']))
+    for finding in summary['findings']:
+        if finding['category'] in ('scanner_match', 'configuration'):
+            finding.setdefault('cve_ids', [])
+            finding.setdefault('cve_status', 'not_identified')
+            finding['how_to_exploit'] = web_review.guide(finding, summary['target'], summary.get('scan_ip'))
     summary['finding_groups'] = finding_groups(summary['findings'])
     summary['risk_assessment'], summary['statistics'] = assessment.unified_risk(summary, summary['finding_groups'])
     severity_counts = {s: 0 for s in ranks}
@@ -617,6 +639,8 @@ def write_reports(root, summary):
             for c in summary.get('injection', {}).get('selected', [])),
         'active_checks_status': summary.get('active_checks', {}).get('status', 'not_run'),
         'active_checks_requests': summary.get('active_checks', {}).get('requests', 0)}
+    summary['coverage']['cors_status'] = summary.get('cors', {}).get('status', 'not_run')
+    summary['coverage']['cors_requests'] = summary.get('cors', {}).get('requests', 0)
     summary['coverage']['sensitive_files_status'] = summary.get('sensitive_files', {}).get('status', 'not_run')
     summary['coverage']['sensitive_files_requests'] = summary.get('sensitive_files', {}).get('requests', 0)
     summary['coverage']['nmap_status'] = summary.get('nmap', {}).get('status', 'legacy_inventory')
@@ -632,7 +656,7 @@ def write_reports(root, summary):
     summary['coverage']['poc_artifact_only_findings'] = sum(
         not any(p.get('kind') in ('http', 'nmap_service', 'tls_handshake') and p.get('status') in ('captured', 'observed')
                 for e in f.get('evidence', []) for p in e.get('poc', [])) for f in summary['findings'])
-    summary['report_schema_version'] = 3
+    summary['report_schema_version'] = 4
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
@@ -665,9 +689,19 @@ def write_reports(root, summary):
         proof = '<details><summary>Observed evidence / PoC</summary><pre>' + esc(json.dumps(poc, indent=2, ensure_ascii=False)) + '</pre></details>'
         if finding.get('reproduction'):
             proof += '<details><summary>GET reproduction helper (credentials omitted)</summary><pre>' + esc(finding['reproduction']) + '</pre></details>'
-        finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small></td><td>{esc(finding["url"])}</td>'
+        cve_label = ' | '.join(finding.get('cve_ids', []))
+        finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small><br><small>{esc(cve_label)}</small></td><td>{esc(finding["url"])}</td>'
                             f'<td>{esc(finding["severity"])}</td><td>needs_validation</td><td>{links}</td>'
                             f'<td>{esc(finding.get("recommendation", ""))}{proof}</td></tr>')
+    exploitation_rows = []
+    for finding in summary['findings']:
+        guide = finding.get('how_to_exploit')
+        if not guide:
+            continue
+        cves = ' · '.join('<a href="https://www.cve.org/CVERecord?id=' + esc(cve) + '">' + esc(cve) + '</a>' for cve in finding.get('cve_ids', [])) or 'No CVE identified'
+        steps = '<ol>' + ''.join('<li>' + esc(step) + '</li>' for step in guide['steps']) + '</ol>'
+        refs = ' · '.join('<a rel="noreferrer" href="' + esc(ref) + '">Reference</a>' for ref in finding.get('references', []))
+        exploitation_rows.append('<article><h3>' + esc(finding['title']) + '</h3><p>' + esc(finding['url']) + '</p><p>' + cves + ' · ' + esc(finding.get('cve_status', 'not_identified')) + '</p>' + refs + steps + '<pre>' + esc('\n'.join(guide['commands'])) + '</pre><p>' + esc(guide['note']) + '</p></article>')
     issues = ''.join(f'<li>{esc(json.dumps(issue, ensure_ascii=False))}</li>' for issue in summary['parse_issues'])
     coverage_rows = ''.join(f'<tr><th>{esc(k)}</th><td>{esc(json.dumps(v) if isinstance(v, (dict, list)) else v)}</td></tr>'
                             for k, v in summary['coverage'].items())
@@ -708,7 +742,7 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
 </style><main><h1>WS-R</h1><p>Target: {esc(summary['target'])} ·
 {esc(summary['created'])} · Mode: {esc(summary['mode'])}</p>
 <p>Assessment: {esc(summary.get('assessment_mode', 'web'))} · Version: {esc(summary.get('version', 'legacy'))}</p>
-<nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a></nav>
+<nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a><a href="#how-to-exploit">How to exploit / CVE</a></nav>
 <div class="cards">{cards}</div>
 <h2>Assessment statistics</h2><table>{statistics_rows}</table>
 <h2>Advanced API and context inventory</h2><details><summary>API routes, access matrix and JWT structure analysis</summary>
@@ -754,7 +788,7 @@ The negotiated protocol is not an exhaustive inventory of accepted protocols/cip
 <h2>Manual follow-up</h2><p>Use Burp Suite to inspect authentication, authorization, IDOR,
 business logic, POST forms and XSS. Crawled GET parameters are selected for bounded SQLmap
 checks; unlinked routes, JavaScript-only pages and authenticated endpoints may remain undiscovered.
-</p><p><a href="summary.json">summary.json</a></p></main><script>{REPORT_SCRIPT}</script></html>"""
+</p><h2 id="how-to-exploit">How to exploit — manual verification and CVE</h2><p>CVE IDs come from scanner template metadata, require validation, and are never inferred from product banners. Application-specific flaws may have no CVE.</p>{"".join(exploitation_rows) or "<p>No vulnerability or configuration candidates were recorded.</p>"}<p><a href="summary.json">summary.json</a></p></main><script>{REPORT_SCRIPT}</script></html>"""
     (root / "report.html").write_text(report, encoding="utf-8")
 
 
@@ -763,8 +797,8 @@ def parser():
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
     p.add_argument('--target', dest='target_option', type=target_input, help='Alternative to the positional target.')
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
-    p.add_argument('--profile', choices=('standard', 'lab'), default='standard',
-                   help='lab: larger crawl budgets, BEUT SQLi detection and bounded differential GET checks.')
+    p.add_argument('--profile', choices=('standard', 'lab', 'web'), default='standard',
+                   help='web: sensitive files, CORS, API and GET error/reflection/redirect checks; lab: larger budgets and BEUT SQLi.')
     p.add_argument('--assessment', choices=('full', 'web', 'network'), default='full',
                    help='full: network configuration, TLS and web; network: inventory/TLS without HTTP crawling; web: legacy web pipeline.')
     p.add_argument('--network-timeout', type=positive, default=60, help='Budget for bounded network/TLS assessment in seconds.')

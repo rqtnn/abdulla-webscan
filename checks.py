@@ -194,6 +194,65 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
     return state
 
 
+def run_cors(bases, target, folder, stop, *, gate=None, timeout=60, request_timeout=10,
+             scan_ip=None, session=None, insecure=False, retain_raw=False, progress=None):
+    """Bounded GET-only CORS comparisons; no browser exploit or preflight mutation."""
+    folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+    gate = gate or RequestGate(5, 0)
+    deadline = time.monotonic() + timeout
+    state = {'status': 'running', 'requests': 0, 'checks': [], 'limits': []}
+    allowed = {origin(url) for url in bases}
+    for url in list(dict.fromkeys(bases))[:8]:
+        if stop.is_set() or time.monotonic() >= deadline:
+            state['limits'].append('time_limit' if not stop.is_set() else 'cancelled')
+            break
+        record = {'url': url, 'outcome': 'inconclusive', 'responses': []}
+        try:
+            scoped_link(url, url, target, allowed)
+            marker = uuid.uuid4().hex
+            supplied = [None, f'https://a-{marker}.invalid', f'https://b-{marker}.invalid']
+            for supplied_origin in supplied:
+                gate.wait(stop, deadline)
+                remaining = min(request_timeout, deadline - time.monotonic())
+                if remaining <= 0 or stop.is_set():
+                    raise TimeoutError('CORS budget reached')
+                headers = dict(session.headers_for(url)) if session else {}
+                if supplied_origin:
+                    headers['Origin'] = supplied_origin
+                state['requests'] += 1
+                response = dict(fetch(url, insecure, remaining, headers=headers, scan_ip=scan_ip))
+                gate.observe(response)
+                body = response.pop('body')
+                response.update(url=url, supplied_origin=supplied_origin,
+                    **evidence.save_body(folder, f"{state['requests']:04d}-cors.bin", body, retain_raw))
+                record['responses'].append(response)
+            control, first, second = record['responses']
+            def reflects(row):
+                headers = [(k.lower(), v.strip()) for k, v in row['headers']]
+                origins = [v for k, v in headers if k == 'access-control-allow-origin']
+                credentials = [v for k, v in headers if k == 'access-control-allow-credentials']
+                return origins == [row['supplied_origin']] and credentials == ['true']
+            if any(r.get('truncated') for r in record['responses']):
+                record['outcome'] = 'inconclusive'
+            elif all(200 <= r['status'] < 300 for r in record['responses']):
+                record['outcome'] = 'no_match'
+                if reflects(first) and reflects(second):
+                    record.update(outcome='candidate', check='cors-credentials-reflection',
+                        title='Arbitrary Origin reflection with credentialed CORS candidate', severity='medium')
+        except Exception as exc:
+            record['error'] = reliability.record('cors_check', exc)
+            if time.monotonic() >= deadline:
+                state['limits'].append('time_limit')
+        state['checks'].append(record)
+        if progress:
+            progress(len(state['checks']), min(8, len(set(bases))))
+        (folder / 'checks.json').write_text(evidence.dumps(state), encoding='utf-8')
+    state['status'] = ('cancelled' if stop.is_set() else 'limited' if state['limits'] else
+                       'incomplete' if any(r['outcome'] == 'inconclusive' for r in state['checks']) else 'completed')
+    (folder / 'checks.json').write_text(evidence.dumps(state), encoding='utf-8')
+    return state
+
+
 def sensitive_signature(path, body):
     """Content signatures, never a status/filename-only vulnerability claim."""
     path = urllib.parse.urlsplit(path).path.lower()
@@ -305,6 +364,10 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             number = state['requests']
         headers = session.headers_for(url) if session else {}
         remaining = min(request_timeout, deadline - time.monotonic())
+        if stop.is_set():
+            raise InterruptedError('Stopped')
+        if remaining <= 0:
+            raise TimeoutError('File check time budget reached')
         response = fetch(url, insecure, remaining, scan_ip=scan_ip, **({'headers': headers} if headers else {}))
         gate.observe(response)
         response = dict(response)
@@ -345,7 +408,13 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
             base = scoped_link('/', base, target, allowed)
             if origin(base) not in controls:
                 url = scoped_link('/wsr-nonexistent-' + uuid.uuid4().hex, base, target, allowed)
-                response, _ = request(url, 'file-control')
+                try:
+                    response, _ = request(url, 'file-control')
+                except Exception as exc:
+                    state.setdefault('control_errors', []).append({'url': base, 'error': reliability.record('file_control', exc)})
+                    if time.monotonic() >= deadline:
+                        state['limits'].append('time_limit')
+                    continue
                 controls[origin(base)] = response
                 state.setdefault('controls', []).append(response)
                 save()
@@ -391,6 +460,6 @@ def run_sensitive_files(bases, target, wordlist, folder, stop, rate=5, timeout=1
                     state['error'] = str(exc)[:500] or 'Interrupted file request'
         state['limits'] = sorted(set(state['limits']))
         state['status'] = 'cancelled' if stop.is_set() else ('limited' if state['limits'] else (
-            'incomplete' if state.get('error') or any(c['outcome'] == 'inconclusive' for c in state['checks']) else 'completed'))
+            'incomplete' if state.get('error') or state.get('control_errors') or any(c['outcome'] == 'inconclusive' for c in state['checks']) else 'completed'))
         save()
     return state

@@ -1,3 +1,35 @@
+## Web vulnerability review (3.1.0)
+
+For an authorized web application, enable the built-in web profile:
+
+```bash
+git pull --ff-only
+python ws_r.py https://your-authorized-site.example --profile web --assessment web
+```
+
+The web profile enables sensitive-file content checks with nonexistent-path controls,
+two-origin credentialed CORS comparisons, OpenAPI inventory, inert HTML reflection,
+external redirect comparisons, and quote/database-error checks on discovered GET
+parameters. Requests remain bounded and pinned to the selected target IP. Use
+`--http-timeout 5 --checks-timeout 120 --crawl-timeout 120` to tune budgets.
+`--no-active-checks` disables parameter probes and CORS; sensitive-file and API GET
+inventory remain enabled. This profile does not enable SSRF metadata probes,
+response data extraction, or time-based SQLi.
+
+The final **How to exploit** report section includes captured control/probe URLs,
+redacted cURL GET helpers, validation steps, and CVE advisory links when Nuclei
+reports a CVE. Template classification (CWE/CVSS) is retained in JSON as
+scanner-reported metadata; it is not a verified application severity. CVE matches
+must be checked against the deployed product, version and advisory prerequisites.
+No CVE is guessed from a banner. Custom application flaws often have no CVE.
+POST/multi-step templates still need their original scanner evidence for reproduction.
+
+External scanners keep their existing restrictions: `--external-tools
+--retain-raw-evidence` requires a numeric IP target. For hostname targets, built-in
+web checks run but external Nuclei is deferred because DNS pinning is not guaranteed.
+Consequently, the hostname profile does **not** claim comprehensive CVE coverage.
+Missing tools, partial jobs and failed controls are recorded as coverage gaps.
+
 # WS-R
 
 WS-R 3.0.0 combines single-host TCP/service inventory, HTML/JavaScript discovery,

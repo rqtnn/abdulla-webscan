@@ -164,6 +164,10 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
         scoped_link(url, url, target, origins)
         gate.wait(stop, deadline)
         remaining = deadline - time.monotonic()
+        if stop.is_set():
+            raise InterruptedError('Stopped')
+        if remaining <= 0:
+            raise TimeoutError('Crawler time budget reached')
         request_headers = session.headers_for(url) if session else {}
         response = (fetch(url, insecure, min(request_timeout, remaining), headers=request_headers, scan_ip=scan_ip)
                 if request_headers else fetch(url, insecure, min(request_timeout, remaining), scan_ip=scan_ip))

@@ -7,6 +7,7 @@ from pathlib import Path
 from scope import normalize_url
 from checks import security_headers
 import evidence
+from web_review import nuclei_metadata
 
 
 def sqlmap_outcome(job):
@@ -168,6 +169,7 @@ def collect(root, summary):
                             elif category == 'configuration':
                                 entry['recommendation'] = 'Review the response in application context and configure the indicated security header; a missing header alone does not prove exploitability.'
                             elif tool == 'nuclei':
+                                entry.update(nuclei_metadata(row))
                                 entry['recommendation'] = row.get('info', {}).get('remediation') or 'Validate the template match and review the template references for remediation appropriate to the deployed version.'
                             elif category == 'endpoint':
                                 entry['recommendation'] = 'Review intended exposure, authentication and access controls for this endpoint.'
