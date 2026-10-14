@@ -1,3 +1,9 @@
+## 3.2.1 - Visible scan menu and WhatWeb results
+
+- Display each menu option on its own line and accept Arabic numerals.
+- Show parsed WhatWeb technologies/versions and explicit missing/failed/empty output diagnostics in the terminal.
+- Preserve interactive bare IP targets so WhatWeb discovery includes HTTPS on port 443.
+
 ## 3.2.0 - Scan selection and history
 
 - Add a post-target terminal menu and CLI-only tool selection with strict stage isolation.

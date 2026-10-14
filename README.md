@@ -1,3 +1,12 @@
+## Menu and WhatWeb output (3.2.1)
+
+Menu numbers now appear one per line; both `5` and `٥` select WhatWeb. Its parsed
+technologies and versions print in the terminal as well as the report. Missing
+binaries, failed jobs, unreadable output and absent HTTP responses are explained.
+Install the scanner on Kali/Ubuntu/WSL with `sudo apt install whatweb`. For services
+on a nonstandard port, enter the complete URL, such as `http://192.168.56.101:8080/`.
+A bare IP checks ports 80/443 without Nmap; it does not guess every possible port.
+
 ## Scan selection and history (3.2.0)
 
 Run `python ws_r.py` in a terminal, enter the target, then choose a scan:

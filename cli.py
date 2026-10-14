@@ -986,9 +986,9 @@ def _main(argv=None):
     if not args.target:
         try:
             entered = UI.prompt_target().strip()
-            # Preserve valid bare IPv6 syntax; interactive bare hosts default to HTTP.
+            # Preserve bare hosts so selected web tools can discover ports 80/443.
             parsed = parse_target(entered)
-            args.target = parsed.url or 'http://' + authority(parsed.host) + '/'
+            args.target = parsed.url or parsed.host
         except (ValueError, argparse.ArgumentTypeError, EOFError) as exc:
             p.error(str(exc))
     try:
@@ -1239,6 +1239,8 @@ def _main(argv=None):
                 for finding in summary.get('findings', [])[:20]:
                     if finding.get('reproduction'):
                         say('[REPRODUCE] ' + finding['reproduction'])
+            if not args.dry_run and ('whatweb' in (args.only or []) or any(j.get('tool') == 'whatweb' for j in summary['jobs'])):
+                UI.whatweb_results(summary)
             UI.severity_table(summary['coverage']['severity_counts'])
             UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")
