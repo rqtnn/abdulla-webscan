@@ -1,3 +1,26 @@
+## Pipeline continuation (3.1.1)
+
+Normal startup now uses `--profile web` by default. The previous default profile
+only crawled unless parameter checks were explicitly enabled, so a run could end
+immediately after discovery. Use `--profile standard` for the previous passive
+behavior. The default enables bounded GET reflection/redirect/database-error
+checks, CORS, sensitive files and API inventory, even without external scanners.
+
+After crawling, `[POST-CRAWL]` shows eligible and excluded GET parameters.
+`[GET CHECKS]`, `[NUCLEI]`, `[SQLMAP]` and `[ADVANCED]` state what ran or why a
+stage was skipped. An application with no eligible GET query parameters produces
+`no_candidates`, not injection coverage; CORS/file/API checks are independent.
+A stage failure is recorded as incomplete coverage and does not suppress the
+remaining independent stages. Cancellation still stops the scan.
+
+```bash
+git pull --ff-only origin main
+python ws_r.py https://your-authorized-site.example --assessment web
+```
+
+External scanner restrictions from 3.1.0 still apply. This update does not silently
+enable absent scanners, raw response retention or external scans for hostnames.
+
 ## Web vulnerability review (3.1.0)
 
 For an authorized web application, enable the built-in web profile:

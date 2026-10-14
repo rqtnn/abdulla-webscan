@@ -1,3 +1,11 @@
+## 3.1.1 - Continue checks after crawling
+
+- Make the web profile the default for normal startup; keep explicit standard mode.
+- Show route/GET candidate counts and explicit post-crawl stage outcomes.
+- Isolate sensitive-file, CORS, crawler, GET, Nuclei setup and API stage errors.
+- Handle unreadable stage checkpoints without suppressing subsequent checks.
+- Test actual post-crawl SQL error/reflection findings and continuation after faults.
+
 ## 3.1.0 - Web findings and reproduction
 
 - Add a web profile with bounded CORS, sensitive-file, API and GET parameter checks.

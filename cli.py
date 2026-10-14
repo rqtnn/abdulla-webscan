@@ -435,6 +435,29 @@ def sqlmap_job(args, root, url, parameter, name, automatic=False):
                min(args.tool_timeout, args.sqli_timeout) if automatic else args.tool_timeout, ['traffic.log'])
 
 
+def stage_snapshot(path, fallback):
+    """A corrupt/missing checkpoint must not abort unrelated web stages."""
+    try:
+        state = json.loads(path.read_text(encoding='utf-8'))
+        if not isinstance(state, dict) or 'status' not in state:
+            raise ValueError('Invalid stage checkpoint')
+        return state
+    except FileNotFoundError:
+        return fallback
+    except Exception as exc:
+        state = dict(fallback, status='incomplete', error=reliability.record('stage_checkpoint', exc))
+        return state
+
+
+def stage_failure(summary, root, name, tool, exc):
+    error = reliability.record(name, exc)
+    say(f'[INCOMPLETE] {name}: {error}; continuing with remaining stages.')
+    summary['jobs'].append(dict(name=name, tool=tool, argv=[], command='', folder=str(root),
+        outputs=['checks.json'] if tool == 'checks' and (root / 'checks.json').is_file() else [],
+        status='incomplete', elapsed=0, exit_code=None, note=error))
+    return error
+
+
 def run_file_stage(args, root, live, summary, runner):
     files_folder = root / 'sensitive-files'
     started = time.monotonic()
@@ -446,7 +469,7 @@ def run_file_stage(args, root, live, summary, runner):
     finally:
         state_file = files_folder / 'checks.json'
         if state_file.exists():
-            state = json.loads(state_file.read_text(encoding='utf-8'))
+            state = stage_snapshot(state_file, {'status': 'incomplete'})
             summary['sensitive_files'] = state
             summary['jobs'].append(dict(name='Sensitive file content checks', tool='checks', argv=[],
                 command='Built-in scoped GET probes with soft-404 control', folder=str(files_folder),
@@ -461,17 +484,25 @@ def run_discovered(args, root, live, summary, runner, binaries):
     summary['injection'] = {'status': 'disabled' if args.no_auto_sqli else 'pending',
                             'selected': [], 'excluded': []}
     if args.sensitive_files and not args.dry_run and not runner.stop.is_set() and live:
-        run_file_stage(args, root, live, summary, runner)
+        try:
+            run_file_stage(args, root, live, summary, runner)
+        except Exception as exc:
+            summary['sensitive_files'] = dict(status='incomplete', error=stage_failure(
+                summary, root, 'Sensitive file stage', 'checks', exc))
     if args.profile == 'web' and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
         cors_folder = root / 'cors'
         started = time.monotonic()
-        summary['cors'] = with_progress('Checking CORS origins', run_cors, live, args.target, cors_folder, runner.stop,
-            gate=getattr(args, 'request_gate', None), timeout=args.checks_timeout, request_timeout=args.http_timeout,
-            scan_ip=getattr(args, 'scan_ip', None), session=getattr(args, 'session', None),
-            insecure=args.insecure, retain_raw=args.retain_raw_evidence)
-        summary['jobs'].append(dict(name='CORS origin comparisons', tool='checks', argv=[],
-            command='GET control and two inert Origin headers', folder=str(cors_folder), outputs=['checks.json'],
-            status=summary['cors']['status'], elapsed=round(time.monotonic() - started, 2), note='Browser impact requires validation.'))
+        try:
+            summary['cors'] = with_progress('Checking CORS origins', run_cors, live, args.target, cors_folder, runner.stop,
+                gate=getattr(args, 'request_gate', None), timeout=args.checks_timeout, request_timeout=args.http_timeout,
+                scan_ip=getattr(args, 'scan_ip', None), session=getattr(args, 'session', None),
+                insecure=args.insecure, retain_raw=args.retain_raw_evidence)
+            summary['jobs'].append(dict(name='CORS origin comparisons', tool='checks', argv=[],
+                command='GET control and two inert Origin headers', folder=str(cors_folder), outputs=['checks.json'],
+                status=summary['cors']['status'], elapsed=round(time.monotonic() - started, 2), note='Browser impact requires validation.'))
+        except Exception as exc:
+            summary['cors'] = dict(status='incomplete', error=stage_failure(
+                summary, cors_folder, 'CORS stage', 'checks', exc))
     if args.no_crawl or args.dry_run or runner.stop.is_set() or not live:
         if args.dry_run:
             summary['injection']['status'] = 'planned_after_discovery' if not args.no_auto_sqli else 'disabled'
@@ -500,6 +531,9 @@ def run_discovered(args, root, live, summary, runner, binaries):
     except KeyboardInterrupt:
         summary['crawl']['status'] = 'cancelled'
         raise
+    except Exception as exc:
+        summary['crawl'].update(status='incomplete', error=stage_failure(
+            summary, root, 'Crawl stage', 'crawler', exc))
     finally:
         (folder / 'crawl.json').write_text(evidence.dumps(summary['crawl']), encoding='utf-8')
         summary['jobs'].append({'name': 'HTML crawling and passive checks', 'tool': 'crawler',
@@ -512,6 +546,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
     (folder / 'urls.txt').write_text('\n'.join(evidence.url(u) for u in urls) + ('\n' if urls else ''), encoding='utf-8')
     selected, excluded = select_candidates(urls, args.max_sqli_jobs)
     summary['injection'].update(selected=selected, excluded=excluded)
+    say(f'[POST-CRAWL] {len(urls)} routes; {len(selected)} eligible GET parameters; {len(excluded)} excluded. Continuing web checks.')
     if runner.stop.is_set():
         summary['injection']['status'] = 'cancelled'
         return
@@ -528,30 +563,48 @@ def run_discovered(args, root, live, summary, runner, binaries):
                 selected, args.target, checks_folder, runner.stop,
                 args.rate, args.checks_timeout, args.insecure, workers=args.http_workers, delay=args.delay,
                 gate=getattr(args, 'request_gate', None), sqli=args.builtin_sqli, time_sqli=args.time_sqli, **options)
+        except Exception as exc:
+            summary['active_checks'] = dict(status='incomplete', error=stage_failure(
+                summary, root, 'GET parameter stage', 'checks', exc))
         finally:
             state_file = checks_folder / 'checks.json'
             if state_file.exists():
-                state = json.loads(state_file.read_text(encoding='utf-8'))
+                state = stage_snapshot(state_file, summary.get('active_checks', {'status': 'incomplete'}))
+                if summary.get('active_checks', {}).get('error'):
+                    state.update(status='incomplete', error=summary['active_checks']['error'])
                 summary['active_checks'] = state
                 summary['jobs'].append(dict(name='GET differential checks', tool='checks', argv=[],
                     command='Built-in control/probe GET checks; no redirects followed', folder=str(checks_folder),
                     outputs=['checks.json'], status=state['status'], elapsed=round(time.monotonic() - started, 2),
                     exit_code=None, note='No-match is limited to these probes; candidates need validation.'))
+        say('[GET CHECKS] ' + summary.get('active_checks', {}).get('status', 'incomplete'))
+    else:
+        summary['active_checks'] = dict(status='disabled', reason='Use --profile web or --active-checks; --no-active-checks disables parameter probes.')
+        say('[GET CHECKS] Disabled by the selected profile/options.')
     additional_urls = [url for url in urls if url not in live]
     (folder / 'scanner-urls.txt').write_text('\n'.join(additional_urls), encoding='utf-8')
     if additional_urls and 'nuclei' not in args.skip and not getattr(args, 'session', None):
-        job = next(j for j in build_jobs(args, root / 'discovered', [live[0]], binaries) if j.tool == 'nuclei')
-        index = job.argv.index('-u')
-        job.argv[index:index + 2] = ['-l', str(folder / 'scanner-urls.txt')]
-        job.name = 'Nuclei discovered URLs'
-        summary['jobs'].append(runner.execute(job))
+        try:
+            job = next(j for j in build_jobs(args, root / 'discovered', [live[0]], binaries) if j.tool == 'nuclei')
+            index = job.argv.index('-u')
+            job.argv[index:index + 2] = ['-l', str(folder / 'scanner-urls.txt')]
+            job.name = 'Nuclei discovered URLs'
+            summary['jobs'].append(runner.execute(job))
+        except Exception as exc:
+            stage_failure(summary, root, 'Discovered Nuclei stage', 'nuclei', exc)
+    else:
+        say('[NUCLEI] Discovered URL scan not run: disabled/skipped, authenticated session, or no additional routes.')
     if args.no_auto_sqli or 'sqlmap' in args.skip:
-        summary['injection']['status'] = 'disabled'
+        summary['injection'].update(status='disabled', reason='SQLmap opt-out or external scanners disabled/skipped; built-in GET checks run independently.')
+        say('[SQLMAP] ' + summary['injection']['reason'])
         return
     if getattr(args, 'session', None):
         summary['injection']['status'] = 'requires_authenticated_scanner'
         return
     summary['injection']['status'] = 'completed' if selected else 'no_candidates'
+    if not selected:
+        say('[SQLMAP] No eligible GET parameters; API and other web stages continue independently.')
+        return
     # Automatic injection jobs run sequentially, independent of scanner parallelism.
     for index, candidate in enumerate(selected, 1):
         job = sqlmap_job(args, root / 'auto-sqli' / f'{index:03d}', candidate['url'],
@@ -797,8 +850,8 @@ def parser():
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
     p.add_argument('--target', dest='target_option', type=target_input, help='Alternative to the positional target.')
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
-    p.add_argument('--profile', choices=('standard', 'lab', 'web'), default='standard',
-                   help='web: sensitive files, CORS, API and GET error/reflection/redirect checks; lab: larger budgets and BEUT SQLi.')
+    p.add_argument('--profile', choices=('standard', 'lab', 'web'), default='web',
+                   help='web (default): sensitive files, CORS, API and GET error/reflection/redirect checks; lab: larger budgets and BEUT SQLi.')
     p.add_argument('--assessment', choices=('full', 'web', 'network'), default='full',
                    help='full: network configuration, TLS and web; network: inventory/TLS without HTTP crawling; web: legacy web pipeline.')
     p.add_argument('--network-timeout', type=positive, default=60, help='Budget for bounded network/TLS assessment in seconds.')
@@ -1098,17 +1151,22 @@ def _main(argv=None):
             urls += summary.get('crawl', {}).get('discovered', []) + live
             # Discovery may include metadata objects rather than literal URL strings.
             urls = [value if isinstance(value, str) else value.get('url', '') for value in urls]
-            summary['advanced'] = with_progress('API and access-control assessment', advanced.run,
-                live, args.target, folder, runner.stop, args.request_gate, scan_ip=args.scan_ip,
-                timeout=args.http_timeout, budget=args.advanced_timeout, workers=args.http_workers,
-                api=args.api_discovery, contexts=args.context_objects, policies=args.context_policies,
-                idor=args.idor, alternatives=args.idor_value, candidates=[u for u in urls if u],
-                ssrf_canary=args.ssrf_canary, metadata=args.ssrf_metadata, session=args.session,
-                insecure=args.insecure, retain=args.retain_raw_evidence,
-                jwt_observations=[jwt for page in summary.get('crawl', {}).get('pages', []) for jwt in page.get('jwt', [])])
-            summary['jobs'].append(dict(name='Advanced GET assessment', tool='advanced', argv=[],
-                command='Bounded scoped GET comparisons', folder=str(folder), outputs=['results.json'],
-                status=summary['advanced']['status'], elapsed=0, note='Candidates require validation'))
+            try:
+                summary['advanced'] = with_progress('API and access-control assessment', advanced.run,
+                    live, args.target, folder, runner.stop, args.request_gate, scan_ip=args.scan_ip,
+                    timeout=args.http_timeout, budget=args.advanced_timeout, workers=args.http_workers,
+                    api=args.api_discovery, contexts=args.context_objects, policies=args.context_policies,
+                    idor=args.idor, alternatives=args.idor_value, candidates=[u for u in urls if u],
+                    ssrf_canary=args.ssrf_canary, metadata=args.ssrf_metadata, session=args.session,
+                    insecure=args.insecure, retain=args.retain_raw_evidence,
+                    jwt_observations=[jwt for page in summary.get('crawl', {}).get('pages', []) for jwt in page.get('jwt', [])])
+                say('[ADVANCED] ' + summary['advanced']['status'])
+                summary['jobs'].append(dict(name='Advanced GET assessment', tool='advanced', argv=[],
+                    command='Bounded scoped GET comparisons', folder=str(folder), outputs=['results.json'],
+                    status=summary['advanced']['status'], elapsed=0, note='Candidates require validation'))
+            except Exception as exc:
+                summary['advanced'] = dict(status='incomplete', error=stage_failure(
+                    summary, root, 'Advanced API stage', 'advanced', exc))
         if args.sqlmap_url and "sqlmap" not in args.skip:
             folder = root / "sqlmap"
             summary["jobs"].append(runner.execute(sqlmap_job(args, folder, args.sqlmap_url,
