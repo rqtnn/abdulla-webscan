@@ -30,7 +30,8 @@ class TerminalUI:
         self.message('Choose scan after entering the target:')
         for option in ('1 Full assessment', '2 Web (80/443)', '3 Quick assessment',
                        '4 Nmap only', '5 WhatWeb only', '6 Crawl only',
-                       '7 Choose individual tools', '8 Specific port'):
+                       '7 Choose individual tools', '8 All TCP ports (1-65535)',
+                       '9 Specific port(s)'):
             self.message(option)
         self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
         def ask(text):
@@ -50,8 +51,10 @@ class TerminalUI:
                 raise ValueError('Select one or more listed tool names')
             return {'scan': 'full', 'only': selected, 'retain_raw_evidence': bool(set(selected) & set(EXTERNAL))}
         if choice == '8':
+            return {'scan': 'all-ports', 'only': None}
+        if choice == '9':
             return {'scan': 'port', 'only': None, 'ports': ask('TCP port(s), e.g. 443 or 80,443: ').strip()}
-        raise ValueError('Choose a scan number from 1 to 8')
+        raise ValueError('Choose a scan number from 1 to 9')
 
     def whatweb_results(self, summary):
         """Show bounded parsed fingerprints and explicit reasons for absent output."""
@@ -60,7 +63,7 @@ class TerminalUI:
         def text(value):
             return re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', str(value))[:240]
         jobs = [job for job in summary.get('jobs', []) if job.get('tool') == 'whatweb']
-        self.message('[WHATWEB] Technology results (fingerprints, not verified vulnerabilities):')
+        self.message('[WHATWEB RESULTS] Detected technologies and server metadata:')
         if not jobs:
             self.message('[WHATWEB] No job started: no responding HTTP(S) URL. Enter the complete URL with its port, e.g. http://192.168.56.101:8080/.')
             return
@@ -68,15 +71,21 @@ class TerminalUI:
                 and any(item.get('tool') == 'whatweb' for item in row.get('evidence', []))]
         for row in rows[:100]:
             versions = []
+            details = []
             for item in row.get('evidence', []):
                 raw = item.get('raw')
                 if item.get('tool') == 'whatweb' and isinstance(raw, dict):
                     plugin = raw.get('plugins', {}).get(row.get('check'), {})
                     if isinstance(plugin, dict):
+                        if not evidence.SECRET.search(str(row.get('check', ''))):
+                            values = plugin.get('string', [])
+                            details.extend(values if isinstance(values, list) else [values])
                         values = plugin.get('version', [])
                         versions.extend(values if isinstance(values, list) else [values])
             suffix = ' | version: ' + ', '.join(text(v) for v in versions[:8]) if versions else ''
+            suffix += ' | ' + ', '.join(text(evidence.safe(v)) for v in details[:4]) if details else ''
             self.message('[WHATWEB] ' + text(evidence.url(row['url'])) + ' | ' + text(row['title']) + suffix)
+        self.message(f'[WHATWEB] {len(rows)} technology observations; {len(jobs)} scanner job(s).')
         if len(rows) > 100:
             self.message('[WHATWEB] More technologies are available in report.html.')
         for job in jobs:
