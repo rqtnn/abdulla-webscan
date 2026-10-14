@@ -28,13 +28,16 @@ class TerminalUI:
     def prompt_scan(self):
         from scan_modes import TOOLS, EXTERNAL
         self.message('Choose scan after entering the target:')
-        self.message('1 Full assessment | 2 Web (80/443) | 3 Quick assessment')
-        self.message('4 Nmap only | 5 WhatWeb only | 6 Crawl only')
-        self.message('7 Choose individual tools | 8 Specific port')
+        for option in ('1 Full assessment', '2 Web (80/443)', '3 Quick assessment',
+                       '4 Nmap only', '5 WhatWeb only', '6 Crawl only',
+                       '7 Choose individual tools', '8 Specific port'):
+            self.message(option)
         self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
         def ask(text):
             return self.console.input(text) if self.console else input(text)
         choice = ask('Scan choice [1]: ').strip() or '1'
+        if choice.isdecimal():
+            choice = str(int(choice))
         if choice in ('1', '2', '3'):
             return {'scan': {'1': 'full', '2': 'web', '3': 'quick'}[choice], 'only': None}
         if choice in ('4', '5', '6'):
@@ -49,6 +52,45 @@ class TerminalUI:
         if choice == '8':
             return {'scan': 'port', 'only': None, 'ports': ask('TCP port(s), e.g. 443 or 80,443: ').strip()}
         raise ValueError('Choose a scan number from 1 to 8')
+
+    def whatweb_results(self, summary):
+        """Show bounded parsed fingerprints and explicit reasons for absent output."""
+        import evidence
+        import re
+        def text(value):
+            return re.sub(r'[\x00-\x1f\x7f-\x9f]', ' ', str(value))[:240]
+        jobs = [job for job in summary.get('jobs', []) if job.get('tool') == 'whatweb']
+        self.message('[WHATWEB] Technology results (fingerprints, not verified vulnerabilities):')
+        if not jobs:
+            self.message('[WHATWEB] No job started: no responding HTTP(S) URL. Enter the complete URL with its port, e.g. http://192.168.56.101:8080/.')
+            return
+        rows = [row for row in summary.get('findings', []) if row.get('category') == 'technology'
+                and any(item.get('tool') == 'whatweb' for item in row.get('evidence', []))]
+        for row in rows[:100]:
+            versions = []
+            for item in row.get('evidence', []):
+                raw = item.get('raw')
+                if item.get('tool') == 'whatweb' and isinstance(raw, dict):
+                    plugin = raw.get('plugins', {}).get(row.get('check'), {})
+                    if isinstance(plugin, dict):
+                        values = plugin.get('version', [])
+                        versions.extend(values if isinstance(values, list) else [values])
+            suffix = ' | version: ' + ', '.join(text(v) for v in versions[:8]) if versions else ''
+            self.message('[WHATWEB] ' + text(evidence.url(row['url'])) + ' | ' + text(row['title']) + suffix)
+        if len(rows) > 100:
+            self.message('[WHATWEB] More technologies are available in report.html.')
+        for job in jobs:
+            if job.get('status') != 'completed':
+                self.message('[WHATWEB] ' + text(job.get('status', 'unknown')) + ': ' + text(job.get('note', '')))
+                if 'not installed/on PATH' in job.get('note', ''):
+                    self.message('[WHATWEB] Install on Kali/Ubuntu/WSL: sudo apt install whatweb')
+                if job.get('status') in ('failed', 'timeout', 'incomplete'):
+                    self.message('[WHATWEB] Scanner diagnostics: ' + str(job['folder']) + '/console.log')
+        issues = [issue for issue in summary.get('parse_issues', []) if any(issue.get('job') == job.get('name') for job in jobs)]
+        if issues:
+            self.message('[WHATWEB] Scanner output could not be fully parsed; inspect results.json and console.log in the report directory.')
+        if not rows:
+            self.message('[WHATWEB] No technology fingerprints parsed. This does not mean the website has no vulnerabilities.')
 
     def completion(self, statistics, priority):
         self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '
