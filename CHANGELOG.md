@@ -1,3 +1,14 @@
+# 4.1.0 — Pinned WhatWeb and web discovery
+
+- Fix menu 5 silently deferring hostname targets: WhatWeb Ruby plugins analyze locally captured, DNS-pinned HTTP packet files; remap findings to the real URL and state passive-only coverage.
+- Bound WhatWeb connection/read timeouts and concurrency; show missing binaries, snapshot failures and incomplete output explicitly.
+- Discover robots.txt, sitemap indexes/URLs and JavaScript source-map references under existing scope and crawl budgets. Metadata/technology observations are not vulnerability claims.
+- Add report type/severity/text filters and reset in a standalone JavaScript source, embedded into portable HTML reports.
+- Add Bash Linux environment bootstrap/check commands; package Bash/JavaScript assets in source releases.
+- Accept Arabic tool-list commas and case-insensitive tool names.
+- Run a single Linux/Python 3.12 CI job with pip caching and cancellation of superseded runs; retain real Nmap and Ruby WhatWeb loopback tests plus a real hostname/menu-5 regression.
+- Re-reviewed official Sn1per web and JavaScript workflows; no upstream source or templates copied.
+
 # 4.0.0 — The World Is Yours
 
 - Linux-only web workflow and Linux CI; new `twiy.py` launcher, historical launcher retained.

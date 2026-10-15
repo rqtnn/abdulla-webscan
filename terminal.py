@@ -54,7 +54,7 @@ class TerminalUI:
             return {'scan': 'full', 'only': [tool], 'retain_raw_evidence': tool in EXTERNAL}
         if choice == '7':
             self.message('Available: ' + ', '.join(TOOLS))
-            selected = list(dict.fromkeys(ask('Tools (comma or space separated): ').replace(',', ' ').split()))
+            selected = list(dict.fromkeys(ask('Tools (comma or space separated): ').replace('،', ',').replace(',', ' ').lower().split()))
             if not selected or any(tool not in TOOLS for tool in selected):
                 raise ValueError('Select one or more listed tool names')
             return {'scan': 'full', 'only': selected, 'retain_raw_evidence': bool(set(selected) & set(EXTERNAL))}
@@ -99,12 +99,14 @@ class TerminalUI:
         if len(rows) > 100:
             self.message('[WHATWEB] More technologies are available in report.html.')
         for job in jobs:
+            if job.get('fingerprint_mode') == 'pinned_http_snapshot':
+                self.message('[WHATWEB] Pinned snapshot: passive header/body plugins; URL, DNS and TLS plugins unavailable.')
             if job.get('status') != 'completed':
                 self.message('[WHATWEB] ' + text(job.get('status', 'unknown')) + ': ' + text(job.get('note', '')))
                 if 'not installed/on PATH' in job.get('note', ''):
                     self.message('[WHATWEB] Install on Kali/Ubuntu/WSL: sudo apt install whatweb')
                 if job.get('status') in ('failed', 'timeout', 'incomplete'):
-                    self.message('[WHATWEB] Scanner diagnostics: ' + str(job['folder']) + '/console.log')
+                    self.message('[WHATWEB] Scanner diagnostics: ' + str(job.get('folder', '.')) + '/console.log')
         issues = [issue for issue in summary.get('parse_issues', []) if any(issue.get('job') == job.get('name') for job in jobs)]
         if issues:
             self.message('[WHATWEB] Scanner output could not be fully parsed; inspect results.json and console.log in the report directory.')

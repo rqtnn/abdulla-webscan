@@ -8,7 +8,8 @@ from brand import VERSION
 def build():
     root = Path(__file__).resolve().parent
     files = sorted(root.glob('*.py')) + [root / name for name in
-        ('README.md', 'CHANGELOG.md', 'WEB_TOOLS.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
+        ('report.js', 'README.md', 'CHANGELOG.md', 'WEB_TOOLS.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
+    files += sorted((root / 'scripts').glob('*.sh')) + sorted((root / 'tests').glob('*.cjs'))
     files += sorted((root / 'tests').glob('*.py')) + [root / 'tests' / 'README.md']
     files += [root / '.github' / 'workflows' / 'python-tests.yml']
     output = root / 'releases' / f'the-world-is-yours-{VERSION}.zip'

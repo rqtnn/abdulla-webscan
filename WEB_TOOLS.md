@@ -21,3 +21,7 @@ Reviewed upstream documentation on 2026-10-15. These are independently implement
 5. Read web investigation priorities, recorded controls/probes, manual reproduction and remediation. A lead is not proof of server access.
 
 The default never runs shell commands on the target or extracts its database. XSS reflection is not established XSS. SQLi, SSTI and template CVE matches each require independent validation. Exact coverage depends on chosen tools and templates; file-upload exploitation, authenticated business flows and blind command injection are not comprehensively tested.
+
+## 4.1 additions
+
+The Sn1per web/JavaScript workflow review led to scoped robots, sitemap-index and source-map-reference inventory. WhatWeb's native HTTP packet-file support (see [official Target implementation](https://github.com/urbanadventurer/WhatWeb/blob/master/lib/target.rb)) enables passive Ruby plugins without a second hostname resolution. It does not provide URL/DNS/TLS plugin coverage. Bash setup and JavaScript report filters have no effect on scan scope or vulnerability confirmation.
