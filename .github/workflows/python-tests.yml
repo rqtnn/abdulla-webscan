@@ -19,8 +19,8 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install -r requirements.txt
-      - name: Install WhatWeb for loopback integration test
+      - name: Install scanners for loopback integration tests
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y whatweb
+        run: sudo apt-get update -qq && sudo apt-get install -y whatweb nmap
       - run: python -m compileall -q .
       - run: python -m unittest discover -s tests -v
