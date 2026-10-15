@@ -1,3 +1,34 @@
+## Reliability review (3.2.3)
+
+- TLS-only performs verified TLS handshakes on the URL/selected ports (443 by
+  default) without HTTP discovery or other scanners. Combine `--only nmap tls`
+  for service discovery followed by TLS assessment.
+- A network/TLS stage error records incomplete coverage and independent web
+  stages continue. Completed closed-port inventories no longer trigger unrelated
+  common-port HTTP fallback.
+- Crawl-only exits successfully when crawling completed, even if GET parameters
+  are excluded from injection checks that were never requested. Failed stages,
+  parsing gaps and incomplete comparisons still produce a nonzero exit.
+- Explicit SQLmap-only targets run one chosen GET check without crawling unrelated
+  routes. Conflicting opt-out flags are rejected instead of silently re-enabled.
+- Copied/renamed report directories rebase their evidence paths on offline rebuild,
+  including Windows/Linux paths. Comparisons keep a sanitized `baseline.json`
+  snapshot so removing the original baseline does not erase comparison inputs.
+- Invalid menu choices/ports can be corrected without restarting. Arabic digits
+  and commas in port inputs are normalized for scanner commands.
+- Source archives include the comparison guide referenced by the README. Linux CI
+  tests the actual Nmap and WhatWeb executables only against loopback fixtures.
+
+```bash
+python ws_r.py 192.168.56.101 --only tls --ports 443,8443
+python ws_r.py 192.168.56.101 --only nmap tls
+python ws_r.py --report-only results/COPIED_RUN
+```
+
+The existing one-host scope, bounded requests and external-scanner restrictions
+remain in force. Findings still need manual validation; offline reconstruction
+requires the original evidence files to remain alongside the summary.
+
 ## All-port menu choice (3.2.2)
 
 WhatWeb-only now prints a dedicated **WHATWEB RESULTS** section with technologies,
@@ -62,8 +93,9 @@ python ws_r.py 192.168.56.101 --scan port --ports 443
 python ws_r.py http://192.168.56.101:8080/ --only checks
 ```
 
-`--only checks` and `--only sqlmap` retain crawling as a declared dependency to
-find eligible GET parameters. Other built-in stages and unselected scanners are
+`--only checks` and automatic `--only sqlmap` retain crawling as a declared
+dependency to find eligible GET parameters. With `--only sqlmap --sqlmap-url ...
+--sqlmap-param ...`, the explicit GET target runs without crawling. Other built-in stages and unselected scanners are
 disabled. A web scanner still requires HTTP discovery to find responding URLs.
 Quick-mode defaults do not override explicit budgets/port selections.
 

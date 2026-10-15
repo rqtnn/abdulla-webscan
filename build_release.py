@@ -8,7 +8,7 @@ from brand import VERSION
 def build():
     root = Path(__file__).resolve().parent
     files = sorted(root.glob('*.py')) + [root / name for name in
-        ('README.md', 'CHANGELOG.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
+        ('README.md', 'CHANGELOG.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
     files += sorted((root / 'tests').glob('*.py')) + [root / 'tests' / 'README.md']
     files += [root / '.github' / 'workflows' / 'python-tests.yml']
     output = root / 'releases' / f'ws-r-{VERSION}.zip'

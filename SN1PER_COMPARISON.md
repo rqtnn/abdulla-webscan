@@ -28,6 +28,7 @@ No Sn1per code, exploit library or templates were copied into WS-R.
 WhatWeb-only still needs HTTP reachability discovery; it does not run Nmap,
 crawling or vulnerability probes. Nmap-only makes no HTTP requests.
 GET checks and automatic SQLmap require crawling as an explicit dependency.
+Explicit SQLmap-only GET targets do not require discovery.
 External scanners require installed executables and retain their existing
 numeric-IP/raw-evidence restrictions. No external target was scanned during
 development; automated scanner fixtures and isolated loopback tests validate

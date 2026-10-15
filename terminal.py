@@ -26,7 +26,14 @@ class TerminalUI:
         return self.console.input(prompt) if self.console else input(prompt)
 
     def prompt_scan(self):
-        from scan_modes import TOOLS, EXTERNAL
+        while True:
+            try:
+                return self._scan_selection()
+            except ValueError as exc:
+                self.message('[INPUT] ' + str(exc) + '; choose again.')
+
+    def _scan_selection(self):
+        from scan_modes import TOOLS, EXTERNAL, parse_ports
         self.message('Choose scan after entering the target:')
         for option in ('1 Full assessment', '2 Web (80/443)', '3 Quick assessment',
                        '4 Nmap only', '5 WhatWeb only', '6 Crawl only',
@@ -53,7 +60,7 @@ class TerminalUI:
         if choice == '8':
             return {'scan': 'all-ports', 'only': None}
         if choice == '9':
-            return {'scan': 'port', 'only': None, 'ports': ask('TCP port(s), e.g. 443 or 80,443: ').strip()}
+            return {'scan': 'port', 'only': None, 'ports': parse_ports(ask('TCP port(s), e.g. 443 or 80,443: '))}
         raise ValueError('Choose a scan number from 1 to 9')
 
     def whatweb_results(self, summary):
@@ -65,7 +72,7 @@ class TerminalUI:
         jobs = [job for job in summary.get('jobs', []) if job.get('tool') == 'whatweb']
         self.message('[WHATWEB RESULTS] Detected technologies and server metadata:')
         if not jobs:
-            self.message('[WHATWEB] No job started: no responding HTTP(S) URL. Enter the complete URL with its port, e.g. http://192.168.56.101:8080/.')
+            self.message('[WHATWEB] No job started. Check discovery/task messages and enter the full URL and port if needed, e.g. http://192.168.56.101:8080/.')
             return
         rows = [row for row in summary.get('findings', []) if row.get('category') == 'technology'
                 and any(item.get('tool') == 'whatweb' for item in row.get('evidence', []))]

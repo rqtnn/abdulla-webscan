@@ -1,3 +1,15 @@
+## 3.2.3 - Runtime and report reliability review
+
+- Fix TLS-only/explicit SQLmap-only isolation and preserve explicit opt-outs.
+- Continue web stages after network assessment failures.
+- Stop common-port fallback after a completed closed-port inventory.
+- Correct crawl-only and incomplete-comparison exit statuses.
+- Rebase moved/copied report evidence paths and snapshot comparison baselines.
+- Validate imported baseline shapes and normalize duplicate tool names.
+- Retry invalid menu inputs and normalize Arabic decimal ports/commas.
+- Include the comparison guide in release archives.
+- Add regression cases plus real Nmap loopback validation in Linux CI.
+
 ## 3.2.2 - All-port discovery and dedicated WhatWeb output
 
 - Make choice 8 scan TCP 1-65535 and assess discovered web services.
