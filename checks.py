@@ -44,7 +44,7 @@ def replace_parameter(url, name, value):
 
 
 def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=False, session=None,
-               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None, scan_ip=None, retain_raw=False, request_timeout=10):
+               workers=1, delay=0, gate=None, sqli=False, time_sqli=False, progress=None, scan_ip=None, retain_raw=False, request_timeout=10, template_checks=False):
     if not 1 <= workers <= 8:
         raise ValueError('Check workers must be between 1 and 8')
     if time_sqli:
@@ -140,6 +140,37 @@ def run_checks(candidates, target, folder, stop, rate=5, timeout=120, insecure=F
                     record.setdefault('matches', []).append({'check': 'sql-error', 'severity': 'medium',
                         'title': 'New database error after quote probe (SQLi needs validation)', 'dbms_signatures': signatures})
                     record['outcome'] = 'candidate'
+            if template_checks and not redirect and 200 <= control['status'] < 300 and not control.get('truncated'):
+                for opening, closing in (('{{', '}}'), ('${', '}')):
+                    comparisons = []
+                    for repeat in range(2):
+                        token = uuid.uuid4().hex
+                        left, right = 101 + int(token[:4], 16) % 800, 101 + int(token[4:8], 16) % 800
+                        prefix, suffix = 'twiy' + token[8:16], token[16:24] + 'end'
+                        expression = prefix + opening + str(left) + '*' + str(right) + closing + suffix
+                        expected = (prefix + str(left * right) + suffix).encode()
+                        inert = prefix + str(left) + '*' + str(right) + suffix
+                        inert_url = replace_parameter(url, name, inert)
+                        expression_url = replace_parameter(url, name, expression)
+                        scoped_link(inert_url, url, target, allowed)
+                        scoped_link(expression_url, url, target, allowed)
+                        inert_response, inert_body = request(inert_url, 'template-control')
+                        evaluated, evaluated_body = request(expression_url, 'template-probe')
+                        record['responses'].extend([inert_response, evaluated])
+                        matched = (inert_response['status'] == evaluated['status'] == control['status']
+                                   and not inert_response.get('truncated') and not evaluated.get('truncated')
+                                   and expected in evaluated_body and expected not in body and expected not in inert_body
+                                   and expression.encode() not in evaluated_body)
+                        comparisons.append(dict(syntax=opening + closing, matched=matched,
+                                                expected=expected.decode(), probe_url=expression_url))
+                        if not matched:
+                            break
+                    record.setdefault('template_samples', []).extend(comparisons)
+                    if len(comparisons) == 2 and all(item['matched'] for item in comparisons):
+                        record.setdefault('matches', []).append(dict(check='server-template-evaluation', severity='high',
+                            title='Server-side template arithmetic evaluated twice (SSTI candidate)'))
+                        record['outcome'] = 'candidate'
+                        break
             if time_sqli and 200 <= control['status'] < 300 and not control.get('truncated'):
                 samples = []
                 delayed = replace_parameter(url, name, value + ' AND SLEEP(1)')

@@ -154,7 +154,7 @@ class ProfessionalTests(unittest.TestCase):
         with patch('builtins.input', return_value='::1'), patch.object(cli, 'tool_paths', return_value={}), contextlib.redirect_stdout(output):
             code = cli.main(['--dry-run', '--no-crawl', '--ui', 'plain', '--output', str(self.root / 'plan.json')])
         self.assertEqual(code, 0)
-        self.assertEqual(output.getvalue().count('WS-R'), 1)
+        self.assertEqual(output.getvalue().count('The World Is Yours'), 1)
         self.assertIn('Findings', output.getvalue().replace('findings', 'Findings'))
         document = json.loads((self.root / 'plan.json').read_text())
         self.assertEqual(document['input_url'], '')

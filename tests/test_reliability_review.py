@@ -50,7 +50,7 @@ class ReliabilityReview(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()), \
                 patch('cli.assessment.run', side_effect=RuntimeError('broken TLS worker')), \
                 patch('cli.probe', return_value=dict(url=BASE, status=200)) as probe:
-            code = cli.main([BASE, '--skip', 'nmap', '--profile', 'standard', '--no-crawl',
+            code = cli.main([BASE, '--assessment', 'full', '--skip', 'nmap', '--profile', 'standard', '--no-crawl',
                 '--enum', 'none', '--output', tmp, '--log-file', tmp + '/log'])
             self.assertEqual(code, 2)
             self.assertTrue(probe.called)
@@ -242,7 +242,7 @@ class ReliabilityReview(unittest.TestCase):
             raise RuntimeError('later TLS check failed')
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(io.StringIO()), \
                 patch('cli.assessment.run', side_effect=fail), patch('cli.probe', return_value=dict(url=BASE, status=200)):
-            code = cli.main([BASE, '--skip', 'nmap', '--profile', 'standard', '--no-crawl', '--enum', 'none',
+            code = cli.main([BASE, '--assessment', 'full', '--skip', 'nmap', '--profile', 'standard', '--no-crawl', '--enum', 'none',
                 '--output', tmp, '--log-file', tmp + '/log'])
             self.assertEqual(code, 2)
             summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())

@@ -231,7 +231,7 @@ class SecurityRegressions(unittest.TestCase):
              patch.object(cli, 'tool_paths', return_value={'httpx': '/bin/false'}), \
              patch.object(cli.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \
              contextlib.redirect_stdout(io.StringIO()):
-            code = cli.main([self.base, '--profile', 'standard', '--external-tools', '--retain-raw-evidence', '--no-crawl',
+            code = cli.main([self.base, '--assessment', 'full', '--profile', 'standard', '--external-tools', '--retain-raw-evidence', '--no-crawl',
                 '--skip', 'nmap', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         document = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())

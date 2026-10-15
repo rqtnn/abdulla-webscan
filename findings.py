@@ -166,6 +166,8 @@ def collect(root, summary):
                                 'severity': severity, 'validation_status': 'needs_validation', 'evidence': []})
                             if tool == 'sqlmap':
                                 entry['recommendation'] = 'Reproduce with a control request; if validated, use parameterized database queries and restrict database account privileges.'
+                            elif check.startswith('server-template-evaluation'):
+                                entry['recommendation'] = 'Treat user input as template data, never template source; use fixed templates and restrict template environment capabilities.'
                             elif category == 'configuration':
                                 entry['recommendation'] = 'Review the response in application context and configure the indicated security header; a missing header alone does not prove exploitability.'
                             elif tool == 'nuclei':

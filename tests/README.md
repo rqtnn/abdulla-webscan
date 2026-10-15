@@ -1,63 +1,8 @@
-# Tests
+# Linux tests
 
-WS-R 3.0 adds `test_advanced.py`: bounded Swagger parsing, non-executed routes,
-malformed JWT/claim handling, adjacent/string identifiers, declared ownership
-and role comparisons, scoped account cookies, SSRF reflection controls,
-metadata root-only probes, request limits, redacted logs, failed subprocess setup,
-report recovery and crawler JWT discovery. All fixtures use isolated loopback
-servers or mocks. `test_ws_r.py` and `test_cli.py` replace the old branded names.
+Run `python3 -m unittest discover -s tests -v` from the repository root.
+CI runs on Ubuntu with Python 3.10 and 3.12. Nmap and WhatWeb are installed for real loopback integration; other adapters use controlled fake executables and exported fixture formats. No public targets are scanned.
 
-Version 2.4 adds unified network/web priority statistics, captured request PoC,
-credential redaction, body evidence integrity, concurrent session isolation,
-single-banner/interactive IPv6 startup and escaped offline PoC reports.
-Mocked/loopback CLI tests adapt only the platform guard on native Windows;
-POSIX process tests remain Linux-only. The real TLS fixture requires OpenSSL.
-CI runs Python 3.10 and 3.12 on Ubuntu and Windows.
+`test_twiy.py` checks the 4.0 web default, CTF menu, custom port override, authenticated origin conflict, arithmetic SSTI positive/negative controls and evidence-based web priorities. Existing suites cover crawler limits, SQL error/timing controls, sensitive-file signatures, API/account comparisons, TLS, DNS pinning, redaction, offline reports, failure continuation and subprocess cancellation.
 
-Version 2.3 adds `test_assessment.py`: network-only runs and offline evidence
-rebuilds, identified-service precedence and lower-confidence port conventions,
-budget/cancellation coverage, CSP script digest, crawler waiting progress,
-real loopback TLS with trusted/untrusted certificates and pinned SNI, and
-trickling HTTP headers/body deadline regressions, allowlisted NSE output and
-negative SSH/SMB configuration controls. TLS fixtures generate a local
-certificate using OpenSSL; no external endpoint is contacted. All 124 tests
-passed on Python 3.12/Linux with Rich installed on 2026-10-13.
-
-Version 2.2 adds `test_security_regressions.py`: numeric-IP HTTP pinning with
-hostname Host/SNI, IPv6 socket selection, safe default evidence, explicit raw
-retention, rejected-URL credential/fragment redaction, whole-URL sensitive-query
-exclusion, shared discovery pacing, Retry-After cancellation/budgets, API GET
-inventory, grouped Dirsearch output, hostname-scanner deferral, and a complete
-CLI run against a local HTTP fixture with nonempty safe JSON output.
-
-Validation on 2026-10-13: Python 3.12/Linux, Rich 14.3.4 installed; all 109 tests
-passed without skips. `python -m compileall -q .` and `git diff --check` passed.
-Existing external-scanner integration tests use local executable fixtures, not
-real scanner binaries. TLS identity is verified with mock sockets; HTTP pipeline
-integration uses loopback servers. No external target was scanned. CI also tests
-Python 3.10; that interpreter was not available for the local run.
-
-Version 2.1 adds single-IP Nmap metadata/CPE parsing, partial XML recovery,
-scan selection, plan-only CLI behavior, service/version output, report escaping,
-high-impact exposure signatures and masked-value/HTML false-positive controls.
-
-Run from the project root on Kali, Linux, or WSL:
-
-```bash
-python3 -m unittest discover -s tests -v
-```
-
-Tests use local HTTP servers and simulated scanner results. They do not scan external targets.
-Native Windows skips five POSIX-only tests; run on Linux to verify the full suite.
-
-WS-R 2.0 covers local JavaScript/inline/comment discovery, origin-bound
-cookies, explicit zero-candidate status, bounded parallel HTTP workers, shared
-pacing, SQL error baseline comparisons and repeated timing pairs, sensitive-file
-content signatures with soft-404 controls, security headers, Rich/plain output
-and relocated JSON/HTML report evidence links. Existing external scanner adapters,
-profile precedence, process orchestration and evidence grouping remain covered.
-
-Install requirements.txt to exercise Rich rendering. Without Rich, its rendering
-test is skipped; fallback behavior is still tested. All network tests target local
-HTTP fixtures. Deliberately broken database baselines, unstable timing controls,
-HTML-escaped reflection and generic HTTP-200 fallbacks must not become positives.
+Some older test helper names and fixture paths retain historical names. Windows/macOS are not supported or exercised by CI.

@@ -3,7 +3,8 @@ from contextlib import contextmanager
 import sys
 import time
 
-BANNER = 'WS-R'
+from brand import NAME
+BANNER = NAME
 
 
 class TerminalUI:
@@ -35,10 +36,10 @@ class TerminalUI:
     def _scan_selection(self):
         from scan_modes import TOOLS, EXTERNAL, parse_ports
         self.message('Choose scan after entering the target:')
-        for option in ('1 Full assessment', '2 Web (80/443)', '3 Quick assessment',
-                       '4 Nmap only', '5 WhatWeb only', '6 Crawl only',
+        for option in ('1 Web vulnerability assessment', '2 Web on ports 80/443', '3 Quick web assessment',
+                       '4 Discover web services (Nmap only)', '5 WhatWeb only', '6 Crawl only',
                        '7 Choose individual tools', '8 All TCP ports (1-65535)',
-                       '9 Specific port(s)'):
+                       '9 Web on custom port(s)', '10 CTF web checks (includes arithmetic SSTI)'):
             self.message(option)
         self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
         def ask(text):
@@ -60,8 +61,10 @@ class TerminalUI:
         if choice == '8':
             return {'scan': 'all-ports', 'only': None}
         if choice == '9':
-            return {'scan': 'port', 'only': None, 'ports': parse_ports(ask('TCP port(s), e.g. 443 or 80,443: '))}
-        raise ValueError('Choose a scan number from 1 to 9')
+            return {'scan': 'port', 'only': None, 'ports': parse_ports(ask('Enter your web port(s), 1-65535 (single, comma list or range): '))}
+        if choice == '10':
+            return {'scan': 'ctf', 'only': None}
+        raise ValueError('Choose a scan number from 1 to 10')
 
     def whatweb_results(self, summary):
         """Show bounded parsed fingerprints and explicit reasons for absent output."""
@@ -107,6 +110,16 @@ class TerminalUI:
             self.message('[WHATWEB] Scanner output could not be fully parsed; inspect results.json and console.log in the report directory.')
         if not rows:
             self.message('[WHATWEB] No technology fingerprints parsed. This does not mean the website has no vulnerabilities.')
+
+    def web_priorities(self, summary):
+        import evidence
+        rows = summary.get('web_leads', [])
+        self.message('[WEB LEADS] ' + str(len(rows)) + ' evidence-linked candidates; manual validation required.')
+        for row in rows[:10]:
+            label = str(row['title']).replace('\n', ' ').replace('\r', ' ')[:160]
+            self.message('[WEB LEAD] ' + row['focus'] + ' | ' + label + ' | ' + evidence.url(row['url']))
+        if rows:
+            self.message('[NEXT] Open report.html for controls, reproduction, remediation and CVE references.')
 
     def completion(self, statistics, priority):
         self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '

@@ -1,4 +1,4 @@
-"""WS-R service inventory and high-impact exposure regression coverage."""
+"""The World Is Yours service inventory and high-impact exposure regression coverage."""
 import contextlib
 import hashlib
 import io

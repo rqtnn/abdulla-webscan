@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WS-R single-host assessment runner. Python 3.10+, Linux/Kali/WSL.
+"""The World Is Yours single-host assessment runner. Python 3.10+, Linux/Kali/WSL.
 
 External scanners stay external: this script schedules them and records evidence.
 """
@@ -176,7 +176,7 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
     try:
         conn = connection(url, insecure, timeout, scan_ip)
         conn.request("GET", urllib.parse.urlunsplit(('', '', u.path or '/', u.query, '')),
-                     headers={"User-Agent": "WS-R/" + VERSION})
+                     headers={"User-Agent": "The World Is Yours/" + VERSION})
         request = evidence.request_details(conn)
         response = conn.getresponse()
         body_error = ''
@@ -550,7 +550,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
     if runner.stop.is_set():
         summary['injection']['status'] = 'cancelled'
         return
-    if (args.active_checks or args.builtin_sqli or args.time_sqli) and not args.no_active_checks:
+    if (args.active_checks or args.builtin_sqli or args.time_sqli or args.template_checks) and not args.no_active_checks:
         checks_folder = root / 'checks'
         started = time.monotonic()
         say('[CHECKS] Comparing GET controls with inert reflection and redirect probes')
@@ -562,7 +562,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
             summary['active_checks'] = with_progress('Checking GET parameters', run_checks,
                 selected, args.target, checks_folder, runner.stop,
                 args.rate, args.checks_timeout, args.insecure, workers=args.http_workers, delay=args.delay,
-                gate=getattr(args, 'request_gate', None), sqli=args.builtin_sqli, time_sqli=args.time_sqli, **options)
+                gate=getattr(args, 'request_gate', None), sqli=args.builtin_sqli, time_sqli=args.time_sqli, template_checks=args.template_checks, **options)
         except Exception as exc:
             summary['active_checks'] = dict(status='incomplete', error=stage_failure(
                 summary, root, 'GET parameter stage', 'checks', exc))
@@ -655,6 +655,7 @@ def write_reports(root, summary):
             finding.setdefault('cve_ids', [])
             finding.setdefault('cve_status', 'not_identified')
             finding['how_to_exploit'] = web_review.guide(finding, summary['target'], summary.get('scan_ip'))
+    summary['web_leads'] = web_review.web_leads(summary['findings'])
     summary['finding_groups'] = finding_groups(summary['findings'])
     summary['risk_assessment'], summary['statistics'] = assessment.unified_risk(summary, summary['finding_groups'])
     severity_counts = {s: 0 for s in ranks}
@@ -754,6 +755,9 @@ def write_reports(root, summary):
         finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small><br><small>{esc(cve_label)}</small></td><td>{esc(finding["url"])}</td>'
                             f'<td>{esc(finding["severity"])}</td><td>needs_validation</td><td>{links}</td>'
                             f'<td>{esc(finding.get("recommendation", ""))}{proof}</td></tr>')
+    web_lead_rows = ''.join('<tr><td>' + str(row['priority']) + '</td><td>' + esc(row['focus']) +
+        '<br>' + esc(row['title']) + '</td><td>' + esc(row['url']) + '</td><td>' + esc(row['next_step']) +
+        '</td></tr>' for row in summary['web_leads'])
     exploitation_rows = []
     for finding in summary['findings']:
         guide = finding.get('how_to_exploit')
@@ -788,7 +792,7 @@ def write_reports(root, summary):
     report = f"""<!doctype html><html lang="en"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-{script_hash}'">
-<title>WS-R — {esc(summary['target'])}</title>
+<title>The World Is Yours — {esc(summary['target'])}</title>
 <style>body{{background:#101827;color:#e6edf7;font:15px system-ui;margin:0;padding:32px}}
 main{{max-width:1400px;margin:auto}}h1{{color:#85ddce}}h2{{margin-top:32px}}a{{color:#85ddce}}
 table{{width:100%;border-collapse:collapse;background:#172235}}td,th{{text-align:left;padding:12px;
@@ -800,7 +804,7 @@ border-bottom:1px solid #2e3e55;vertical-align:top;overflow-wrap:anywhere}}th{{c
 input,select{{background:#172235;color:#e6edf7;border:1px solid #a3b8cf;padding:10px;border-radius:6px;margin:8px}}
 [hidden]{{display:none}}nav a{{display:inline-block;margin:8px 16px 8px 0}}
 pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}}
-</style><main><h1>WS-R</h1><p>Target: {esc(summary['target'])} ·
+</style><main><h1>The World Is Yours</h1><p>Target: {esc(summary['target'])} ·
 {esc(summary['created'])} · Mode: {esc(summary['mode'])}</p>
 <p>Assessment: {esc(summary.get('assessment_mode', 'web'))} · Version: {esc(summary.get('version', 'legacy'))}</p>
 <nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a><a href="#how-to-exploit">How to exploit / CVE</a></nav>
@@ -810,6 +814,8 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
 <h2>Assessment statistics</h2><table>{statistics_rows}</table>
 <h2>Advanced API and context inventory</h2><details><summary>API routes, access matrix and JWT structure analysis</summary>
 <pre>{esc(json.dumps(summary.get('advanced', {'status': 'not_run'}), indent=2, ensure_ascii=False))}</pre></details>
+<h2>CTF web investigation priorities</h2><p>Evidence-linked leads, not confirmed attack chains or proof of server access. Technologies and missing headers are listed separately below.</p>
+<table><thead><tr><th>Order</th><th>Web lead</th><th>URL</th><th>Next verification</th></tr></thead><tbody>{web_lead_rows or '<tr><td colspan="4">No web vulnerability candidates recorded in the tested scope.</td></tr>'}</tbody></table>
 <h2>Unified triage matrix</h2><p>Overall priority: {esc(summary['risk_assessment']['overall_priority'])}.
 {esc(summary['risk_assessment']['note'])} Ordinal priorities 0–4 are not CVSS scores.</p>
 <div class="scroll"><table><tr><th>Severity</th><th>Priority</th><th>Network groups</th><th>Web groups</th>
@@ -820,7 +826,7 @@ Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an e
 not a validated penetration testing report. Each active web job uses its own rate cap;
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
-<h2>Assessment coverage</h2><p>One-host network/web assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
+<h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. External scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
@@ -856,9 +862,9 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 
 
 def parser():
-    p = argparse.ArgumentParser(description="WS-R: one-host web assessment pipeline for authorized labs.")
+    p = argparse.ArgumentParser(description="The World Is Yours: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
-    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports'), default='full', help='Choose a named scan plan.')
+    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports', 'ctf'), default='full', help='Choose a named scan plan.')
     p.add_argument('--only', nargs='+', choices=scan_modes.TOOLS, help='Run only selected tools; checks/SQLmap use crawl for GET discovery. External tools require --retain-raw-evidence.')
     menu = p.add_mutually_exclusive_group()
     menu.add_argument('--menu', action='store_true', help='Show scan choices after the target.')
@@ -868,8 +874,8 @@ def parser():
     p.add_argument("--mode", choices=("sequential", "parallel"), default="sequential")
     p.add_argument('--profile', choices=('standard', 'lab', 'web'), default='web',
                    help='web (default): sensitive files, CORS, API and GET error/reflection/redirect checks; lab: larger budgets and BEUT SQLi.')
-    p.add_argument('--assessment', choices=('full', 'web', 'network'), default='full',
-                   help='full: network configuration, TLS and web; network: inventory/TLS without HTTP crawling; web: legacy web pipeline.')
+    p.add_argument('--assessment', choices=('full', 'web', 'network'), default='web',
+                   help='full: network configuration, TLS and web; network: inventory/TLS without HTTP crawling; web (default): discover HTTP services and assess web vulnerabilities.')
     p.add_argument('--network-timeout', type=positive, default=60, help='Budget for bounded network/TLS assessment in seconds.')
     p.add_argument('--service-checks', action='store_true', help='Opt in to allowlisted Nmap SSH algorithm and SMB2 signing negotiation; no arbitrary/vuln scripts.')
     p.add_argument('--http-timeout', type=positive, default=10, help='Per-request timeout for built-in discovery, crawl, checks and TLS; default 10 seconds.')
@@ -917,6 +923,7 @@ def parser():
     p.add_argument('--no-active-checks', action='store_true', help='Disable differential checks, including in lab profile.')
     p.add_argument('--checks-timeout', type=positive, default=120, help='Time budget for differential checks.')
     p.add_argument('--builtin-sqli', action='store_true', help='Preliminary quote/error signature checks with a control response.')
+    p.add_argument('--template-checks', action='store_true', help='Compare two arithmetic-only template expressions per syntax with control requests (CTF preset enables this).')
     p.add_argument('--time-sqli', action='store_true', help='Opt-in repeated one-second MySQL delay anomaly probes, serialized; not proof of SQLi.')
     p.add_argument('--sensitive-files', action='store_true', help='Bounded wordlist GETs with baseline and content signatures.')
     p.add_argument('--file-limit', type=positive, default=100, help='Maximum sensitive-file URLs across all origins, <=1000.')
@@ -973,8 +980,8 @@ def _main(argv=None):
         incomplete = summary.get('comparison', {}).get('status') == 'incomplete'
         parsing_gaps = any(issue.get('kind') != 'manual_review' for issue in summary.get('parse_issues', []))
         return 2 if incomplete or parsing_gaps else 0
-    if os.name != "posix":
-        p.error("Run under Kali/Linux or WSL; native Windows is not supported.")
+    if not sys.platform.startswith('linux'):
+        p.error('The World Is Yours requires Linux (Kali/Ubuntu or a Linux WSL environment).')
     if args.check:
         for name, path in tool_paths(args.dry_run).items():
             say(f"{name:12} {path or 'MISSING'}")
@@ -1018,6 +1025,11 @@ def _main(argv=None):
         p.error("Use --sqlmap-url and --sqlmap-param together.")
     try:
         prepare_target(args)
+        if args.input_url and args.ports and origin(args.input_url)[2] not in listed_ports(args.ports):
+            if args.cookie_file or args.contexts:
+                raise ValueError('Selected ports exclude the authenticated URL. Use a matching URL to preserve credential origin scope.')
+            say('[WEB SCOPE] Target URL port is outside selected ports; using the same host on your selected ports. URL path/query are not carried across origins.')
+            args.input_url = ''
         args.session = None
         args.context_objects, args.context_policies = [], []
         if args.contexts:
@@ -1126,10 +1138,13 @@ def _main(argv=None):
                 summary['nmap'].update(status='inconclusive', note='Nmap XML unreadable: ' + str(exc))
             UI.services_table(summary['ports'], summary['nmap']['note'])
         # If Nmap is absent/failed, only try common ports within a requested port scope.
-        fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
+        requested = sorted(listed_ports(args.ports)) if args.ports else []
+        if len(requested) > 64 and summary['nmap'].get('status') not in ('completed', 'completed_no_open_ports'):
+            say('[WEB SCOPE] More than 64 selected ports require successful Nmap discovery; direct fallback probes are limited to 64 ports.')
+        fallback = requested[:64] if args.ports else sorted(COMMON_WEB_PORTS)
         if args.only and not args.ports and not args.input_url and not summary['ports']:
             fallback = [80, 443]
-        services = summary["ports"] if args.scan == 'all-ports' or summary['nmap'].get('status') == 'completed_no_open_ports' else (summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback])
+        services = summary["ports"] if args.scan == 'all-ports' or summary['nmap'].get('status') == 'completed_no_open_ports' else (summary["ports"] or [{"port": port, "service": "http-candidate"} for port in fallback])
         base_urls = [url.rstrip('/') + '/' for url in args.url]
         if args.input_url:
             base_urls.insert(0, args.input_url)
@@ -1260,6 +1275,7 @@ def _main(argv=None):
             if not args.dry_run and ('whatweb' in (args.only or []) or any(j.get('tool') == 'whatweb' for j in summary['jobs'])):
                 UI.whatweb_results(summary)
             if args.only != ['whatweb']:
+                UI.web_priorities(summary)
                 UI.severity_table(summary['coverage']['severity_counts'])
                 UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")
@@ -1288,7 +1304,7 @@ def _main(argv=None):
                  or summary['coverage']['job_gaps']
                  or summary.get('comparison', {}).get('status') == 'incomplete'
                  or summary.get('nmap', {}).get('status') in ('partial', 'unavailable', 'inconclusive')
-                 or (summary.get('injection', {}).get('excluded') and ((args.active_checks or args.builtin_sqli or args.time_sqli) and not args.no_active_checks or not args.no_auto_sqli and 'sqlmap' not in args.skip))
+                 or (summary.get('injection', {}).get('excluded') and ((args.active_checks or args.builtin_sqli or args.time_sqli or args.template_checks) and not args.no_active_checks or not args.no_auto_sqli and 'sqlmap' not in args.skip))
                  or summary['coverage']['parsing_gaps'] or summary['coverage']['sqli_inconclusive']
                  or any('error' in page or page.get('truncated') for page in summary.get('crawl', {}).get('pages', []))) else 0
 

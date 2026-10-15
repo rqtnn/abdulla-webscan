@@ -8,10 +8,10 @@ from brand import VERSION
 def build():
     root = Path(__file__).resolve().parent
     files = sorted(root.glob('*.py')) + [root / name for name in
-        ('README.md', 'CHANGELOG.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
+        ('README.md', 'CHANGELOG.md', 'WEB_TOOLS.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
     files += sorted((root / 'tests').glob('*.py')) + [root / 'tests' / 'README.md']
     files += [root / '.github' / 'workflows' / 'python-tests.yml']
-    output = root / 'releases' / f'ws-r-{VERSION}.zip'
+    output = root / 'releases' / f'the-world-is-yours-{VERSION}.zip'
     output.parent.mkdir(parents=True, exist_ok=True)
     manifest = []
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as archive:

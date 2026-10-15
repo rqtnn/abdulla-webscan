@@ -27,11 +27,17 @@ def apply(args, argv):
         raise ValueError('The same tool cannot be selected with --only and --skip')
     if chosen and args.scan != 'full':
         raise ValueError('Use --only or --scan; do not combine separate scan plans')
+    if args.scan == 'ctf':
+        args.assessment = 'web'
+        args.template_checks = not args.no_active_checks
+        args.active_checks = not args.no_active_checks
+        args.builtin_sqli = not args.no_active_checks
+        args.sensitive_files = args.api_discovery = True
     if args.scan == 'all-ports':
         if args.ports or args.top_ports or args.url_port_only or 'nmap' in args.skip:
             raise ValueError('All-port discovery requires Nmap without a restricted port selection')
         args.all_ports = True
-        args.assessment = 'full'
+        args.assessment = 'web'
         default(args, argv, 'nmap_timeout', 3600)
     elif args.scan == 'web':
         args.assessment = 'web'
