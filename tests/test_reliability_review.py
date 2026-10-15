@@ -99,7 +99,7 @@ class ReliabilityReview(unittest.TestCase):
             rebuilt = json.loads((moved / 'summary.json').read_text())
             self.assertEqual(len(rebuilt['findings']), len(summary['findings']))
             self.assertFalse(rebuilt['parse_issues'])
-            self.assertTrue(all(Path(job['folder']).is_relative_to(moved) for job in rebuilt['jobs']))
+            self.assertTrue(all(Path(job['folder']).is_relative_to(moved.resolve()) for job in rebuilt['jobs']))
 
     def test_comparison_snapshot_survives_original_baseline_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -165,7 +165,7 @@ class ReliabilityReview(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             state = dict(run_directory=r'C:\old\run', jobs=[dict(folder=r'C:\old\run\crawl')])
             run_history.relocate(state, Path(tmp))
-            self.assertEqual(state['jobs'][0]['folder'], str(Path(tmp) / 'crawl'))
+            self.assertEqual(state['jobs'][0]['folder'], str(Path(tmp).resolve() / 'crawl'))
 
     def test_menu_retries_invalid_port_and_normalizes_arabic_port_input(self):
         with contextlib.redirect_stdout(io.StringIO()), patch('builtins.input', side_effect=['9', '0', '9', '٨٠،٤٤٣']):
@@ -199,6 +199,11 @@ class ReliabilityReview(unittest.TestCase):
     @unittest.skipUnless(os.name == 'posix' and shutil.which('nmap'), 'Requires installed Nmap (Linux CI installs it)')
     def test_real_nmap_binary_records_a_loopback_open_port(self):
         class Handler(http.server.BaseHTTPRequestHandler):
+            def handle(self):
+                try:
+                    super().handle()
+                except (ConnectionResetError, BrokenPipeError):
+                    pass  # Nmap service detection deliberately closes some probes early.
             def do_GET(self):
                 body = b'<title>WSR local Nmap fixture</title>'
                 self.send_response(200)
@@ -249,5 +254,5 @@ class ReliabilityReview(unittest.TestCase):
             summary = dict(jobs=[dict(folder='/old/run/nmap', name='Nmap', tool='nmap'),
                 dict(folder='/old/run/web-01/whatweb', name='WhatWeb', tool='whatweb')], findings=[])
             run_history.relocate(summary, Path(tmp))
-            self.assertEqual(summary['jobs'][0]['folder'], str(Path(tmp) / 'nmap'))
-            self.assertEqual(summary['jobs'][1]['folder'], str(Path(tmp) / 'web-01' / 'whatweb'))
+            self.assertEqual(summary['jobs'][0]['folder'], str(Path(tmp).resolve() / 'nmap'))
+            self.assertEqual(summary['jobs'][1]['folder'], str(Path(tmp).resolve() / 'web-01' / 'whatweb'))
