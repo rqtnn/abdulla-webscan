@@ -23,7 +23,7 @@ class TerminalUI:
         self.message(f'{BANNER} | {version}')
 
     def prompt_target(self):
-        prompt = 'Target URL/IP (e.g. http://127.0.0.1:3000): '
+        prompt = 'Target URL/IP (e.g. www.test.com): '
         return self.console.input(prompt) if self.console else input(prompt)
 
     def prompt_scan(self):
