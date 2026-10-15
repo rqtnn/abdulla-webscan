@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WS-R command-line entry point."""
+"""The World Is Yours command-line entry point."""
 from cli import main
 
 if __name__ == '__main__':

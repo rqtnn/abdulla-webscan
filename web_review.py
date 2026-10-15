@@ -68,6 +68,8 @@ def guide(finding, target, scan_ip=None):
         steps.append('Locate the inert marker in the HTML and inspect its output context. Reflection alone does not establish executable XSS.')
     elif 'external-redirect' in check:
         steps.append('Compare the Location header with the supplied external URL. Do not follow the redirect; confirm the destination is user-controlled.')
+    elif 'server-template-evaluation' in check:
+        steps.append('Repeat both arithmetic expressions and inert controls. Confirm two different computed products between the recorded unique delimiters, rather than reflected expression text. Identify the template engine and rendering context; arithmetic evaluation does not establish operating-system command execution.')
     elif 'sql' in check.lower() or any(e.get('tool') == 'sqlmap' for e in finding.get('evidence', [])):
         steps.append('Compare baseline and probe database errors or repeated timing samples. Confirm parameter influence before calling this SQL injection; do not extract database data.')
     elif 'sensitive-file' in check or 'phpinfo' in check:
@@ -82,3 +84,32 @@ def guide(finding, target, scan_ip=None):
         steps.append('Verify the observation in application context and demonstrate its impact before assigning exploitability.')
     return dict(status='manual_validation_required', steps=steps, commands=commands[:8],
                 note='Displayed commands are redacted GET helpers, not automatic exploitation or a claim of a confirmed vulnerability.')
+
+
+def web_leads(findings):
+    """Return evidence-linked web investigation leads, without asserting server access."""
+    leads = []
+    for finding in findings:
+        if finding.get('category') != 'scanner_match' or not finding.get('url', '').startswith(('http://', 'https://')):
+            continue
+        check = finding.get('check', '').lower()
+        text = (check + ' ' + finding.get('title', '')).lower()
+        if any(term in text for term in ('server-template', 'ssti', 'remote code', 'command injection', 'rce', 'deserialization')):
+            focus, priority = 'Server-side execution candidate', 1
+            next_step = 'Validate the recorded request and engine/CVE prerequisites in the CTF lab. A scanner match or arithmetic evaluation alone does not prove a shell.'
+        elif 'sql' in text:
+            focus, priority = 'Database input candidate', 2
+            next_step = 'Compare controls and payload evidence, identify the affected parameter and database privileges. SQL injection does not automatically imply operating-system access.'
+        elif any(term in text for term in ('sensitive-file', 'phpinfo', 'traversal', 'file inclusion', 'lfi')):
+            focus, priority = 'File/configuration exposure candidate', 2
+            next_step = 'Confirm the content signature and access requirements against the nonexistent-path control; determine the actual data exposed.'
+        elif 'access-control' in text:
+            focus, priority = 'Authorization boundary candidate', 2
+            next_step = 'Compare explicitly allowed and disallowed test accounts and verify resource ownership.'
+        else:
+            focus, priority = 'Other web candidate', 3
+            next_step = 'Inspect the recorded evidence and manual verification instructions in application context.'
+        leads.append(dict(finding_id=finding.get('id', ''), title=finding['title'], url=finding['url'],
+                          focus=focus, priority=priority, next_step=next_step,
+                          status='requires_manual_validation', cve_ids=finding.get('cve_ids', [])))
+    return sorted(leads, key=lambda row: (row['priority'], row['url'], row['title']))

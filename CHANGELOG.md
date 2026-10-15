@@ -1,3 +1,13 @@
+# 4.0.0 — The World Is Yours
+
+- Linux-only web workflow and Linux CI; new `twiy.py` launcher, historical launcher retained.
+- Web-focused default assessment and clearer numbered menu, with CTF preset.
+- Selected web ports replace an excluded target URL seed without broadening scope; authenticated origin conflicts remain errors.
+- Direct HTTP/HTTPS fallback for custom ports when Nmap is unavailable, bounded to 64 ports.
+- Arithmetic-only SSTI checks with random two-probe confirmation and literal controls.
+- Evidence-linked CTF web investigation priorities in JSON/HTML, separate from technologies/header notes.
+- Rewritten documentation with upstream review, actual integrations and coverage limits.
+
 ## 3.2.3 - Runtime and report reliability review
 
 - Fix TLS-only/explicit SQLmap-only isolation and preserve explicit opt-outs.
