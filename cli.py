@@ -46,12 +46,14 @@ import assessment
 import advanced
 import reliability
 import whatweb_snapshot
+import adaptive
+import wordpress_scan
 from transport import connection
 
 from brand import VERSION
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
-ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
+ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap", "wpscan")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
 REPORT_SCRIPT = (Path(__file__).resolve().parent / 'report.js').read_text(encoding='utf-8')
@@ -177,6 +179,7 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
         result = {"url": url, "status": response.status, 'request': request, 'headers': [list(p) for p in response.getheaders()], "server": response.getheader("Server", ""),
                 "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip() if title else "",
                 "location": response.getheader("Location", ""), "retry_after": response.getheader("Retry-After", ""), "tls_verified": u.scheme == "https" and not insecure}
+        result['recon'] = adaptive.inspect(url, result['headers'], body)
         if body_error:
             result['error'] = body_error
         return result
@@ -265,8 +268,9 @@ class Runner:
                         record.update(status="cancelled", note="Run interrupted before starting.")
                         return record
                     # Argument arrays only; shell expansion never executes user input.
+                    isolated = {'env': wordpress_scan.environment(job.folder), 'cwd': str(job.folder)} if job.tool == 'wpscan' else {}
                     proc = subprocess.Popen([binary, *job.argv[1:]], stdout=log, stderr=subprocess.STDOUT,
-                                            stdin=subprocess.DEVNULL, start_new_session=True)
+                                            stdin=subprocess.DEVNULL, start_new_session=True, **isolated)
                     self.active.add(proc)
                 deadline = start + job.timeout
                 while proc.poll() is None:
@@ -280,8 +284,8 @@ class Runner:
                         break
                 record["exit_code"] = proc.returncode
                 if record["status"] == "planned":
-                    record["status"] = "completed" if proc.returncode == 0 else "failed"
-                    if proc.returncode != 0:
+                    record["status"] = "completed" if proc.returncode == 0 or job.tool == "wpscan" and proc.returncode == 5 else "failed"
+                    if record["status"] == "failed":
                         record["note"] = "See console.log for scanner errors/version incompatibilities."
         except Exception as exc:
             record.update(status="failed", note='Execution error: ' + reliability.record('subprocess_execution', exc))
@@ -295,6 +299,18 @@ class Runner:
                 with self.lock:
                     self.active.discard(proc)
             record["elapsed"] = round(time.monotonic() - start, 2)
+        if job.tool == 'wpscan' and record['status'] == 'completed':
+            try:
+                doc = wordpress_scan.load(job.folder / 'results.json')
+                list(wordpress_scan.observations(doc, job.argv[job.argv.index('--url') + 1]))
+                record['note'] = ('WPScan advisory matches need validation; vulnerability coverage depends on the configured API/database. '
+                                  'Passive inventory only; no password or user enumeration.')
+                api = doc.get('vuln_api') or {}
+                record['advisory_coverage'] = 'reported_by_scanner' if api and not any(api.get(k) for k in ('error', 'http_error', 'parse_error')) else 'unavailable'
+                if record['advisory_coverage'] == 'unavailable':
+                    record['note'] += ' Vulnerability API unavailable; this is an inventory, not a clean vulnerability result.'
+            except (OSError, ValueError, TypeError) as exc:
+                record.update(status='incomplete', note='WPScan output invalid: ' + reliability.record('wpscan_output', exc))
         if job.snapshot:
             try:
                 whatweb_snapshot.remap(job.folder / 'results.json', job.snapshot['url'])
@@ -378,6 +394,13 @@ def build_jobs(args, root, urls, binaries):
                             [binaries.get(tool) or ("httpx-toolkit" if tool == "httpx" else tool),
                              *parameters(folder)], folder, timeout, list(outputs), reason, snapshot))
 
+        route_extensions = adaptive.extensions(getattr(args, 'adaptive_plan', {}), url)
+        extension_args = {
+            'ffuf': ['-e', ','.join('.' + e for e in route_extensions)],
+            'gobuster': ['-x', ','.join(route_extensions)],
+            'feroxbuster': ['-x', *route_extensions],
+            'dirsearch': ['-e', ','.join(route_extensions), '--force-extensions']}
+
         if "httpx" not in args.skip:
             add("httpx", lambda f: ["-u", url, "-nfs", "-sc", "-title", "-server", "-td",
                                    "-json", "-silent", "-duc", "-t", "1", "-rl", rate,
@@ -420,6 +443,10 @@ def build_jobs(args, root, urls, binaries):
                 add(tool, lambda f: ["-u", enum_url, "-w", wordlist, "-t", "2", "--max-rate", rate,
                                      "--timeout", "5", "--retries", "0", "--format", "json",
                                      "--no-color", "-q", "-o", str(f / "results.json")], ["results.json"])
+        if route_extensions:
+            for job in jobs:
+                if job.folder.parent == prefix and job.tool in extension_args:
+                    job.argv.extend(extension_args[job.tool])
         if "nikto" not in args.skip:
             add("nikto", lambda f: ["-h", url, "-Tuning", "123b", "-Pause", str(1 / args.rate),
                                    "-timeout", "5", "-maxtime", f"{timeout}s",
@@ -436,6 +463,57 @@ def build_jobs(args, root, urls, binaries):
                 f'No YAML templates at {templates}; run nuclei -ut -ud "{templates}" first, or use --templates.'
                 if (not templates.is_dir() or next(templates.rglob('*.yaml'), None) is None) and not args.dry_run else "")
     return jobs
+
+
+def update_adaptive(args, root, summary):
+    enabled = not args.no_adaptive and not args.only
+    observed, _ = collect(root, summary)
+    args.adaptive_plan = adaptive.plan(dict(summary, findings=observed), enabled)
+    summary['adaptive_plan'] = args.adaptive_plan
+    (root / 'reconnaissance.json').write_text(evidence.dumps(args.adaptive_plan), encoding='utf-8')
+    for site in args.adaptive_plan['sites']:
+        say('[RECON] ' + evidence.url(site['url']) + ': ' + (', '.join(site['technologies']) or 'unknown stack'))
+        for step in site['follow_up']:
+            say('[ASSESSMENT PLAN] ' + step)
+
+
+def run_wordpress(args, root, summary, runner, binaries):
+    if args.assessment == 'network' or args.no_adaptive and not args.only or args.only and 'wpscan' not in args.only:
+        return
+    sites = summary.get('adaptive_plan', {}).get('sites', [])
+    urls, excluded = [], []
+    for site in sites:
+        for url in site['wordpress_bases']:
+            try:
+                from scope import scoped_link
+                value = scoped_link(url, url, args.target, {origin(site['url'])})
+                if value not in urls and len(urls) < 16:
+                    urls.append(value)
+            except ValueError:
+                excluded.append(dict(url=evidence.url(url), reason='Action-like or out-of-scope WordPress base'))
+    summary['wordpress_excluded'] = excluded
+    if not urls:
+        summary['wordpress'] = dict(status='not_detected' if not args.dry_run else 'awaiting_discovery',
+            note='WPScan not selected without strong WordPress evidence; absence is not proof that WordPress is absent.')
+        return
+    if 'wpscan' in args.skip:
+        summary['wordpress'] = dict(status='disabled', urls=urls, note='WordPress detected; WPScan is disabled/skipped. Enable --external-tools --retain-raw-evidence to run installed external scanners.')
+        return
+    summary['wordpress'] = dict(status='selected', urls=urls,
+        note='Passive WPScan inventory; vulnerability data requires a configured WPScan API token/database. No password attacks.')
+    for index, url in enumerate(urls, 1):
+        folder = root / 'wordpress' / f'{index:02d}'
+        reason = ''
+        if args.session or args.contexts:
+            reason = 'WPScan does not inherit account credentials; use an unauthenticated scan.'
+        if not binaries.get('wpscan') and not reason:
+            reason = 'wpscan is not installed/on PATH. Install WPScan separately and run wpscan --update before scanning.'
+        job = Job('WPScan @ ' + url, 'wpscan', wordpress_scan.command(binaries.get('wpscan'), url, folder, args),
+                  folder, args.tool_timeout, ['results.json'], reason)
+        summary['jobs'].append(runner.execute(job))
+    summary['wordpress']['advisory_coverage'] = [j.get('advisory_coverage', 'not_run') for j in summary['jobs'] if j['tool'] == 'wpscan']
+    statuses = [j['status'] for j in summary['jobs'] if j['tool'] == 'wpscan']
+    summary['wordpress']['status'] = 'completed' if statuses and all(s == 'completed' for s in statuses) else 'incomplete'
 
 
 def sqlmap_job(args, root, url, parameter, name, automatic=False):
@@ -490,19 +568,19 @@ def run_file_stage(args, root, live, summary, runner):
                 exit_code=None, note='Content signatures are candidates needing validation.'))
 
 
-def run_discovered(args, root, live, summary, runner, binaries):
+def run_discovered(args, root, live, summary, runner, binaries, discovery_only=False):
     """Discovery and checks are separate stages; only in-scope URLs become inputs."""
-    summary['crawl'] = {'status': 'disabled' if args.no_crawl else 'planned',
-                        'pages': [], 'discovered': [], 'forms': [], 'limits': []}
-    summary['injection'] = {'status': 'disabled' if args.no_auto_sqli else 'pending',
-                            'selected': [], 'excluded': []}
-    if args.sensitive_files and not args.dry_run and not runner.stop.is_set() and live:
+    summary.setdefault('crawl', {'status': 'disabled' if args.no_crawl else 'planned',
+                        'pages': [], 'discovered': [], 'forms': [], 'limits': []})
+    summary.setdefault('injection', {'status': 'disabled' if args.no_auto_sqli else 'pending',
+                            'selected': [], 'excluded': []})
+    if not discovery_only and args.sensitive_files and not args.dry_run and not runner.stop.is_set() and live:
         try:
             run_file_stage(args, root, live, summary, runner)
         except Exception as exc:
             summary['sensitive_files'] = dict(status='incomplete', error=stage_failure(
                 summary, root, 'Sensitive file stage', 'checks', exc))
-    if (args.profile == 'web' or getattr(args, 'cors_checks', False)) and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
+    if not discovery_only and (args.profile == 'web' or getattr(args, 'cors_checks', False)) and not args.no_active_checks and not args.dry_run and not runner.stop.is_set() and live:
         cors_folder = root / 'cors'
         started = time.monotonic()
         try:
@@ -522,38 +600,42 @@ def run_discovered(args, root, live, summary, runner, binaries):
         elif not args.no_auto_sqli:
             summary['injection']['status'] = 'not_run'
         return
-    observed, _ = collect(root, summary)
-    allowed = {origin(url) for url in live}
-    seeds = live + [f['url'] for f in observed if f['category'] == 'endpoint'
-                    and f['check'].isdigit() and 200 <= int(f['check']) < 400 and origin(f['url']) in allowed]
     folder = root / 'crawl'
-    folder.mkdir(parents=True, exist_ok=True)
-    say('[CRAWL] Discovering same-host pages and GET parameters')
-    started = time.monotonic()
-    try:
-        options = {'workers': args.http_workers, 'delay': args.delay,
-                   'gate': getattr(args, 'request_gate', None), 'scan_ip': getattr(args, 'scan_ip', None),
-                   'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True,
-                   'request_timeout': args.http_timeout, 'metadata_paths': not getattr(args, 'no_web_metadata', False)}
-        if args.crawl_redirects:
-            options['follow_redirects'] = True
-        if getattr(args, 'session', None):
-            options['session'] = args.session
-        with_progress('Discovering routes', crawl, seeds, args.target, folder, runner.stop, args.crawl_pages, args.crawl_depth,
-              args.rate, args.crawl_timeout, args.insecure, summary['crawl'], **options)
-    except KeyboardInterrupt:
-        summary['crawl']['status'] = 'cancelled'
-        raise
-    except Exception as exc:
-        summary['crawl'].update(status='incomplete', error=stage_failure(
-            summary, root, 'Crawl stage', 'crawler', exc))
-    finally:
-        (folder / 'crawl.json').write_text(evidence.dumps(summary['crawl']), encoding='utf-8')
-        summary['jobs'].append({'name': 'HTML crawling and passive checks', 'tool': 'crawler',
-            'argv': [], 'command': 'Built-in bounded HTTP GET crawler', 'folder': str(folder),
-            'outputs': ['crawl.json'], 'status': summary['crawl']['status'],
-            'elapsed': round(time.monotonic() - started, 2), 'exit_code': None,
-            'note': ', '.join(summary['crawl']['limits'])})
+    if not summary['crawl'].get('recon_complete'):
+        observed, _ = collect(root, summary)
+        allowed = {origin(url) for url in live}
+        seeds = live + [f['url'] for f in observed if f['category'] == 'endpoint'
+                        and f['check'].isdigit() and 200 <= int(f['check']) < 400 and origin(f['url']) in allowed]
+        folder.mkdir(parents=True, exist_ok=True)
+        say('[CRAWL] Discovering same-host pages and GET parameters')
+        started = time.monotonic()
+        try:
+            options = {'workers': args.http_workers, 'delay': args.delay,
+                       'gate': getattr(args, 'request_gate', None), 'scan_ip': getattr(args, 'scan_ip', None),
+                       'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True,
+                       'request_timeout': args.http_timeout, 'metadata_paths': not getattr(args, 'no_web_metadata', False)}
+            if args.crawl_redirects:
+                options['follow_redirects'] = True
+            if getattr(args, 'session', None):
+                options['session'] = args.session
+            with_progress('Discovering routes', crawl, seeds, args.target, folder, runner.stop, args.crawl_pages, args.crawl_depth,
+                  args.rate, args.crawl_timeout, args.insecure, summary['crawl'], **options)
+        except KeyboardInterrupt:
+            summary['crawl']['status'] = 'cancelled'
+            raise
+        except Exception as exc:
+            summary['crawl'].update(status='incomplete', error=stage_failure(
+                summary, root, 'Crawl stage', 'crawler', exc))
+        finally:
+            (folder / 'crawl.json').write_text(evidence.dumps(summary['crawl']), encoding='utf-8')
+            summary['jobs'].append({'name': 'HTML crawling and passive checks', 'tool': 'crawler',
+                'argv': [], 'command': 'Built-in bounded HTTP GET crawler', 'folder': str(folder),
+                'outputs': ['crawl.json'], 'status': summary['crawl']['status'],
+                'elapsed': round(time.monotonic() - started, 2), 'exit_code': None,
+                'note': ', '.join(summary['crawl']['limits'])})
+        summary['crawl']['recon_complete'] = True
+    if discovery_only:
+        return
     urls = [url for url in summary['crawl']['discovered']
             if not urllib.parse.urlsplit(url).path.lower().endswith('.js')]
     (folder / 'urls.txt').write_text('\n'.join(evidence.url(u) for u in urls) + ('\n' if urls else ''), encoding='utf-8')
@@ -823,6 +905,9 @@ pre{{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
 <nav aria-label="Report sections"><a href="#findings">Findings and remediation</a><a href="#tls">TLS</a><a href="#services">Services</a><a href="#tasks">Task status</a><a href="#how-to-exploit">How to exploit / CVE</a></nav>
 <div class="cards">{cards}</div>
 <h2>Scan plan</h2><pre>{esc(json.dumps(summary.get('scan_plan', {}), indent=2))}</pre><p><a href="findings.csv">Export findings CSV</a></p>
+<h2>Reconnaissance and adaptive assessment plan</h2><p>Observed technologies guide follow-up; fingerprints do not confirm vulnerabilities.</p>
+<pre>{esc(json.dumps(summary.get('adaptive_plan', {'status': 'not_recorded'}), indent=2, ensure_ascii=False))}</pre>
+<p>WordPress stage: {esc(summary.get('wordpress', {}).get('status', 'not_requested'))}. {esc(summary.get('wordpress', {}).get('note', ''))}</p>
 <h2>Run comparison</h2><details><summary>Changes from baseline (not proof of remediation)</summary><pre>{esc(json.dumps(summary.get('comparison', {'status': 'not_requested'}), indent=2))}</pre></details>
 <h2>Assessment statistics</h2><table>{statistics_rows}</table>
 <h2>Advanced API and context inventory</h2><details><summary>API routes, access matrix and JWT structure analysis</summary>
@@ -926,6 +1011,7 @@ def parser():
     p.add_argument("--check", action="store_true", help="List installed tool paths and exit; no target needed.")
     p.add_argument("--sqlmap-url", help="Optional specific same-host GET URL for a separate SQLi detection job.")
     p.add_argument("--sqlmap-param", help="Existing GET parameter name to test, e.g. id.")
+    p.add_argument('--no-adaptive', action='store_true', help='Use the fixed generic plan; disable automatic technology-specific routes and WPScan.')
     p.add_argument('--no-crawl', action='store_true', help='Disable automatic HTML discovery and checks derived from it.')
     p.add_argument('--crawl-pages', type=positive, default=100, help='Maximum crawler GET requests, default 100.')
     p.add_argument('--crawl-depth', type=positive, default=3, help='Maximum link depth, default 3.')
@@ -1238,14 +1324,30 @@ def _main(argv=None):
                 say('[WEB] Built-in discovery/checks enabled; external web scanners are opt-in (--external-tools --retain-raw-evidence) for numeric IP targets.')
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
         binaries = tool_paths(args.dry_run, args.only) if not runner.stop.is_set() and args.assessment != 'network' else {}
+        # Reconnaissance precedes follow-up tools. Explicit --only stays isolated.
+        update_adaptive(args, root, summary)
         jobs = build_jobs(args, root, live, binaries)
-        summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
+        fingerprints = [j for j in jobs if j.tool in ('whatweb', 'httpx')]
+        summary['jobs'].extend(run_batch(runner, fingerprints, 'sequential', args.workers))
+        if not args.only and not args.no_adaptive:
+            say('[RECON] Mapping routes and forms before selecting follow-up checks')
+            try:
+                run_discovered(args, root, live, summary, runner, binaries, discovery_only=True)
+            except Exception as exc:
+                stage_failure(summary, root, 'Reconnaissance crawl', 'crawler', exc)
+        update_adaptive(args, root, summary)
+        jobs = build_jobs(args, root, live, binaries)
+        say('[ASSESSMENT] Running checks selected after HTTP reconnaissance')
+        summary['jobs'].extend(run_batch(runner, [j for j in jobs if j.tool not in ('whatweb', 'httpx')], 'sequential', args.workers))
         try:
             run_discovered(args, root, live, summary, runner, binaries)
         except Exception as exc:
             summary['jobs'].append(dict(name='Built-in web assessment', tool='checks', argv=[],
                 command='', folder=str(root), outputs=[], status='incomplete', elapsed=0,
                 note=reliability.record('web_stage', exc)))
+        update_adaptive(args, root, summary)
+        if not runner.stop.is_set():
+            run_wordpress(args, root, summary, runner, binaries)
         if live and not args.dry_run and not runner.stop.is_set() and (any((args.api_discovery, args.contexts, args.idor, args.ssrf_canary, args.ssrf_metadata)) or any(page.get('jwt') for page in summary.get('crawl', {}).get('pages', []))):
             say('[ADVANCED] Scoped API inventory and bounded GET comparisons')
             folder = root / 'advanced'

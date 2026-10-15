@@ -25,3 +25,10 @@ The default never runs shell commands on the target or extracts its database. XS
 ## 4.1 additions
 
 The Sn1per web/JavaScript workflow review led to scoped robots, sitemap-index and source-map-reference inventory. WhatWeb's native HTTP packet-file support (see [official Target implementation](https://github.com/urbanadventurer/WhatWeb/blob/master/lib/target.rb)) enables passive Ruby plugins without a second hostname resolution. It does not provide URL/DNS/TLS plugin coverage. Bash setup and JavaScript report filters have no effect on scan scope or vulnerability confirmation.
+
+
+## WPScan and adaptive planning (4.2)
+
+Reviewed the [official WPScan documentation](https://github.com/wpscanteam/wpscan/wiki/WPScan-User-Documentation), upstream CLI/enumeration/exit-code implementations, [ffuf extensions](https://github.com/ffuf/ffuf/wiki/Input-methods) and [Dirsearch wordlists](https://github.com/maurosoria/dirsearch/blob/master/docs/wordlists.md). WPScan uses explicit popular-plugin/theme enumeration with passive detection, one worker, throttling, request/process deadlines and no in-scan updates. No API token is stored in command lines or reports. `--only wpscan` still requires WordPress evidence; it never forces detection. The adapter inherits numeric-IP and raw-evidence restrictions; API/database availability limits advisory coverage.
+
+The default plan fingerprints HTTP headers, generator tags and same-origin asset structure, optionally enriches them with WhatWeb, maps routes, then runs follow-up tools. Enabled directory adapters receive stack-specific extensions, including `--force-extensions` for Dirsearch's plain wordlist. Python/Ruby/Node indicators guide manual review; no language-specific exploit is inferred or executed. All observations require validation.

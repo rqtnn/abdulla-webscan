@@ -8,6 +8,7 @@ from scope import normalize_url
 from checks import security_headers
 import evidence
 from web_review import nuclei_metadata
+import wordpress_scan
 
 
 def sqlmap_outcome(job):
@@ -71,6 +72,8 @@ def observations(tool, row, base, scan_ip=None):
         for item in row.get('vulnerabilities', []):
             check = str(item.get('id') or item.get('OSVDB') or item.get('msg', ''))
             yield 'scanner_match', check + ':' + item.get('method', 'GET'), urllib.parse.urljoin(base, item.get('url', '/')), item.get('msg', check), 'unknown'
+    elif tool == 'wpscan':
+        yield from wordpress_scan.observations(row, base)
     elif tool == 'sqlmap':
         yield 'scanner_match', row['parameter'] + ':' + row['type'], base, row['title'], 'unknown'
     elif tool == 'crawler':
@@ -170,6 +173,8 @@ def collect(root, summary):
                                 entry['recommendation'] = 'Treat user input as template data, never template source; use fixed templates and restrict template environment capabilities.'
                             elif category == 'configuration':
                                 entry['recommendation'] = 'Review the response in application context and configure the indicated security header; a missing header alone does not prove exploitability.'
+                            elif tool == 'wpscan' and category == 'scanner_match':
+                                entry['recommendation'] = 'Validate the installed WordPress component/version and advisory applicability, then update or remove the affected component. Scanner advisory matches are not confirmed exploits.'
                             elif tool == 'nuclei':
                                 entry.update(nuclei_metadata(row))
                                 entry['recommendation'] = row.get('info', {}).get('remediation') or 'Validate the template match and review the template references for remediation appropriate to the deployed version.'
