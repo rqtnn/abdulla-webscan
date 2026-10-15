@@ -123,13 +123,10 @@ def positive(value):
 
 
 def ports(value):
-    if not re.fullmatch(r"\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*", value):
-        raise argparse.ArgumentTypeError("Use 80,443,8080 or 1-65535.")
-    for part in value.split(","):
-        bounds = [int(x) for x in part.split("-")]
-        if any(x < 1 or x > 65535 for x in bounds) or bounds[0] > bounds[-1]:
-            raise argparse.ArgumentTypeError("Ports must be in ascending ranges between 1 and 65535.")
-    return value
+    try:
+        return scan_modes.parse_ports(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def listed_ports(value):
@@ -640,6 +637,7 @@ def run_batch(runner, jobs, mode, workers):
 
 
 def write_reports(root, summary):
+    summary['run_directory'] = str(root)
     if summary.get('probes'):
         folder = root / 'discovery'
         folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -716,7 +714,7 @@ def write_reports(root, summary):
     run_history.export_csv(root / 'findings.csv', summary['findings'])
     if summary.get('comparison_base'):
         try:
-            summary['comparison'] = run_history.compare(summary, run_history.load(summary['comparison_base']))
+            summary['comparison'] = run_history.compare(summary, run_history.load(root / summary['comparison_base']))
         except (OSError, ValueError, KeyError, TypeError) as exc:
             summary['comparison'] = dict(status='incomplete', error=type(exc).__name__)
         (root / 'comparison.json').write_text(evidence.dumps(summary['comparison']), encoding='utf-8')
@@ -955,6 +953,7 @@ def _main(argv=None):
         root = args.report_only.expanduser().resolve()
         try:
             summary = json.loads((root / 'summary.json').read_text(encoding='utf-8'))
+            run_history.relocate(summary, root)
             for candidate in summary.get('injection', {}).get('selected', []):
                 job = next((j for j in summary['jobs'] if j['name'] == candidate.get('job')), None)
                 if job:
@@ -963,7 +962,7 @@ def _main(argv=None):
                 previous = run_history.load(args.compare)
                 if previous['target'] != summary['target']:
                     raise ValueError('Baseline target differs from this run')
-                summary['comparison_base'] = str(args.compare.expanduser().resolve())
+                summary['comparison_base'] = run_history.snapshot(root, previous)
             summary['report_generator_version'] = VERSION
             write_reports(root, summary)
             if args.output.suffix.lower() in ('.json', '.html'):
@@ -971,7 +970,9 @@ def _main(argv=None):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             p.error(f'Cannot rebuild this run: {exc}')
         say(f'Rebuilt report: {root / "report.html"}')
-        return 0
+        incomplete = summary.get('comparison', {}).get('status') == 'incomplete'
+        parsing_gaps = any(issue.get('kind') != 'manual_review' for issue in summary.get('parse_issues', []))
+        return 2 if incomplete or parsing_gaps else 0
     if os.name != "posix":
         p.error("Run under Kali/Linux or WSL; native Windows is not supported.")
     if args.check:
@@ -1093,7 +1094,7 @@ def _main(argv=None):
             previous = run_history.load(args.compare)
             if previous['target'] != args.target:
                 raise ValueError('Baseline target differs from the selected target')
-            summary['comparison_base'] = str(args.compare.expanduser().resolve())
+            summary['comparison_base'] = run_history.snapshot(root, previous)
         except (OSError, ValueError) as exc:
             p.error(str(exc))
     summary['assessment_mode'] = args.assessment
@@ -1128,7 +1129,7 @@ def _main(argv=None):
         fallback = sorted(COMMON_WEB_PORTS & listed_ports(args.ports)) if args.ports else sorted(COMMON_WEB_PORTS)
         if args.only and not args.ports and not args.input_url and not summary['ports']:
             fallback = [80, 443]
-        services = summary["ports"] if args.scan == 'all-ports' else (summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback])
+        services = summary["ports"] if args.scan == 'all-ports' or summary['nmap'].get('status') == 'completed_no_open_ports' else (summary["ports"] or [{"port": port, "service": "unknown"} for port in fallback])
         base_urls = [url.rstrip('/') + '/' for url in args.url]
         if args.input_url:
             base_urls.insert(0, args.input_url)
@@ -1140,14 +1141,25 @@ def _main(argv=None):
             say('[NETWORK] Reviewing service exposure and verified TLS; no login or exploit probes')
             started = time.monotonic()
             folder = root / 'network'
-            summary['network_assessment'] = with_progress('Network configuration and TLS', assessment.run,
-                args.target, args.scan_ip, summary['ports'], base_urls, folder, runner.stop, args.request_gate,
-                timeout=args.network_timeout, request_timeout=args.http_timeout)
-            summary['jobs'].append(dict(name='Network configuration and TLS', tool='network', argv=[],
-                command='Pinned TLS handshakes and Nmap exposure review', folder=str(folder), outputs=['assessment.json'],
-                status=summary['network_assessment']['status'], elapsed=round(time.monotonic() - started, 2), note=''))
+            tls_urls = list(base_urls)
+            if args.only and 'tls' in args.only and 'nmap' not in args.only:
+                requested_ports = sorted(listed_ports(args.ports)) if args.ports else ([origin(args.input_url)[2]] if args.input_url else [443])
+                tls_urls += ['https://' + authority(args.target, port) + '/' for port in requested_ports[:33]]
+                summary['tls_candidates'] = tls_urls
+            try:
+                summary['network_assessment'] = with_progress('Network configuration and TLS', assessment.run,
+                    args.target, args.scan_ip, summary['ports'], tls_urls, folder, runner.stop, args.request_gate,
+                    timeout=args.network_timeout, request_timeout=args.http_timeout)
+                summary['jobs'].append(dict(name='Network configuration and TLS', tool='network', argv=[],
+                    command='Pinned TLS handshakes and Nmap exposure review', folder=str(folder), outputs=['assessment.json'],
+                    status=summary['network_assessment']['status'], elapsed=round(time.monotonic() - started, 2), note=''))
+            except Exception as exc:
+                error = stage_failure(summary, folder, 'Network configuration and TLS', 'network', exc)
+                state = stage_snapshot(folder / 'assessment.json', {'checks': [], 'tls': []})
+                state.update(status='incomplete', error=error)
+                summary['network_assessment'] = state
             write_reports(root, summary)
-        if args.assessment == 'network':
+        if args.assessment == 'network' or args.only == ['sqlmap'] and args.sqlmap_url:
             candidate_urls = []
             args.no_crawl = True
         if args.dry_run:
@@ -1182,6 +1194,8 @@ def _main(argv=None):
             summary["outcome"] = f"{len(live)} responding HTTP(S) base URLs."
             if args.assessment == 'network':
                 summary['outcome'] = 'Network assessment selected; HTTP discovery and crawling were not requested.'
+            elif args.only == ['sqlmap'] and args.sqlmap_url:
+                summary['outcome'] = 'Explicit SQLmap GET target selected; HTTP discovery and crawling were not requested.'
             elif not live:
                 summary["outcome"] += " No web tool jobs started; check the IP, ports, TLS or use --url."
         if not args.dry_run:
@@ -1262,18 +1276,19 @@ def _main(argv=None):
         return 130
     if args.dry_run:
         return 0
-    if args.assessment == 'network' and summary.get('nmap', {}).get('status') not in ('completed', 'completed_no_open_ports'):
+    if args.assessment == 'network' and set(args.only or []) != {'tls'} and summary.get('nmap', {}).get('status') not in ('completed', 'completed_no_open_ports'):
         return 2
     # Report incomplete coverage even if other scanners succeeded.
-    if args.assessment != 'network' and not any("status" in row for row in summary["probes"]) and not args.sqlmap_url:
+    if args.assessment != 'network' and not any("status" in row for row in summary["probes"]) and not args.sqlmap_url and summary['nmap'].get('status') != 'completed_no_open_ports':
         return 2
     return 2 if (any("error" in row and not (row.get('fallback_candidate') and any(
                     'status' in other and origin(other['url'])[1:] == origin(row['url'])[1:]
                     and origin(other['url'])[0] != origin(row['url'])[0] for other in summary['probes']))
                     for row in summary['probes'])
-                 or any(j["status"] in ("skipped", "failed", "timeout", "limited", "incomplete") for j in summary["jobs"])
+                 or summary['coverage']['job_gaps']
+                 or summary.get('comparison', {}).get('status') == 'incomplete'
                  or summary.get('nmap', {}).get('status') in ('partial', 'unavailable', 'inconclusive')
-                 or summary.get('injection', {}).get('excluded')
+                 or (summary.get('injection', {}).get('excluded') and ((args.active_checks or args.builtin_sqli or args.time_sqli) and not args.no_active_checks or not args.no_auto_sqli and 'sqlmap' not in args.skip))
                  or summary['coverage']['parsing_gaps'] or summary['coverage']['sqli_inconclusive']
                  or any('error' in page or page.get('truncated') for page in summary.get('crawl', {}).get('pages', []))) else 0
 

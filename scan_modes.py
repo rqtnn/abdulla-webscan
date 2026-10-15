@@ -1,4 +1,6 @@
 """Explicit scan plans. Selected tools cannot silently launch unrelated stages."""
+import re
+
 EXTERNAL = ('httpx', 'whatweb', 'ffuf', 'gobuster', 'feroxbuster', 'dirsearch', 'nikto', 'nuclei', 'sqlmap')
 TOOLS = ('nmap', *EXTERNAL, 'crawl', 'checks', 'files', 'cors', 'api', 'tls')
 
@@ -10,7 +12,17 @@ def default(args, argv, name, value):
 
 
 def apply(args, argv):
+    args.only = list(dict.fromkeys(args.only)) if args.only else None
     chosen = set(args.only or [])
+    needs_crawl = bool(chosen & {'crawl', 'checks'} or 'sqlmap' in chosen and not args.sqlmap_url)
+    if needs_crawl and args.no_crawl:
+        raise ValueError('Selected tools need crawling; remove --no-crawl or choose different tools')
+    if chosen & {'checks', 'cors'} and args.no_active_checks:
+        raise ValueError('Selected checks conflict with --no-active-checks')
+    if 'sqlmap' in chosen and args.no_auto_sqli and not args.sqlmap_url:
+        raise ValueError('Automatic SQLmap selection conflicts with --no-auto-sqli')
+    if chosen == {'tls'} and (args.all_ports or args.top_ports):
+        raise ValueError('TLS-only requires explicit --ports or a URL; select nmap and tls for port discovery')
     if chosen & set(args.skip):
         raise ValueError('The same tool cannot be selected with --only and --skip')
     if chosen and args.scan != 'full':
@@ -39,8 +51,8 @@ def apply(args, argv):
     args.skip = list(dict.fromkeys(args.skip + [t for t in ('nmap', *EXTERNAL) if t not in chosen]))
     args.enum = 'all' if chosen & {'ffuf', 'gobuster', 'feroxbuster', 'dirsearch'} else 'none'
     args.profile = 'standard'
-    args.no_crawl = not bool(chosen & {'crawl', 'checks', 'sqlmap'})
-    args.no_auto_sqli = 'sqlmap' not in chosen
+    args.no_crawl = not needs_crawl
+    args.no_auto_sqli = 'sqlmap' not in chosen or bool(args.sqlmap_url)
     args.active_checks = args.builtin_sqli = 'checks' in chosen
     args.no_active_checks = not bool(chosen & {'checks', 'cors'})
     args.time_sqli = args.time_sqli and 'checks' in chosen
@@ -55,11 +67,25 @@ def apply(args, argv):
     args.sqlmap_param = args.sqlmap_param if 'sqlmap' in chosen else None
     args.service_checks = False
     args.external_tools = bool(chosen & set(EXTERNAL))
-    args.assessment = 'network' if chosen == {'nmap'} else ('full' if 'tls' in chosen else 'web')
+    args.assessment = 'network' if chosen <= {'nmap', 'tls'} else ('full' if 'tls' in chosen else 'web')
 
 
 def plan(args):
     requested = list(args.only or [])
     return dict(mode=args.scan, requested_tools=requested or ['profile:' + args.profile],
-                dependencies=['crawl_for_GET_parameters'] if set(requested) & {'checks', 'sqlmap'} else [],
+                dependencies=['crawl_for_GET_parameters'] if not args.no_crawl and set(requested) & {'checks', 'sqlmap'} else [],
                 external_raw_output=args.external_tools and args.retain_raw_evidence)
+
+
+def parse_ports(value):
+    """Normalize decimal port inputs for scanner argv, including Arabic digits."""
+    value = value.strip().replace('،', ',')
+    if not re.fullmatch(r'\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*', value):
+        raise ValueError('Use TCP ports such as 80,443,8080 or 1-65535')
+    normalized = []
+    for part in value.split(','):
+        bounds = [int(number) for number in part.split('-')]
+        if any(number < 1 or number > 65535 for number in bounds) or bounds[0] > bounds[-1]:
+            raise ValueError('Ports must be between 1 and 65535 with ascending ranges')
+        normalized.append('-'.join(str(number) for number in bounds))
+    return ','.join(normalized)
