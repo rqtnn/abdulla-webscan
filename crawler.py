@@ -9,6 +9,7 @@ import re
 import ssl
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 
 from transport import connection
 import evidence
@@ -18,15 +19,40 @@ from brand import USER_AGENT
 
 from scope import normalize_url, origin, scoped_link, ACTION, RequestGate, resolve_one
 
-STATIC = re.compile(r'\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|pdf|zip|mp4|mp3)$', re.I)
+STATIC = re.compile(r'\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|map|pdf|zip|mp4|mp3)$', re.I)
 SECRET = evidence.SECRET
 SCRIPT = re.compile(r'\.js$', re.I)
 
 
+def robots_links(text):
+    """Inventory concrete advertised paths; wildcard/action/scope checks remain in add()."""
+    values = []
+    for line in text.splitlines()[:4000]:
+        name, sep, value = line.partition(':')
+        value = value.split('#', 1)[0].strip()
+        if sep and name.strip().lower() in ('allow', 'disallow', 'sitemap') and value and not any(c in value for c in '*$'):
+            values.append(value)
+    return list(dict.fromkeys(values))[:2000]
+
+
+def sitemap_links(body):
+    """Bounded XML inventory, including sitemap indexes, without external resolution."""
+    try:
+        root = ET.fromstring(body)
+    except (ET.ParseError, ValueError):
+        return []
+    if root.tag.rsplit('}', 1)[-1] not in ('urlset', 'sitemapindex'):
+        return []
+    return list(dict.fromkeys(element.text.strip() for element in root.iter()
+        if element.tag.rsplit('}', 1)[-1] == 'loc' and element.text and element.text.strip()))[:2000]
+
+
 def route_literals(text):
     """Conservative quoted URL inventory; never evaluate JavaScript."""
-    return list(dict.fromkeys(m.group(2) for m in re.finditer(
+    literals = list(dict.fromkeys(m.group(2) for m in re.finditer(
         r'''(["'])(https?://[^\s<>"']+|/(?!/)[^\s<>"']*|\./[^\s<>"']+|\.\./[^\s<>"']+|[A-Za-z0-9_-]+/[^\s<>"']+)\1''', text)))[:2000]
+    maps = re.findall(r'(?m)^\s*//[#@]\s*sourceMappingURL=([^\s]+)', text)
+    return list(dict.fromkeys(literals + [value for value in maps if not value.startswith('data:')]))[:2000]
 
 
 class Links(HTMLParser):
@@ -143,7 +169,7 @@ def select_candidates(urls, limit):
 
 
 def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=120,
-          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None, scan_ip=None, retain_raw=False, api_paths=False, request_timeout=10):
+          insecure=False, result=None, follow_redirects=False, session=None, workers=1, delay=0, gate=None, progress=None, scan_ip=None, retain_raw=False, api_paths=False, request_timeout=10, metadata_paths=False):
     if not 1 <= workers <= 8:
         raise ValueError('Crawler workers must be between 1 and 8')
     folder.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -209,6 +235,10 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
 
     for seed in seeds:
         add(seed, seed, 0, 'seed')
+    if metadata_paths:
+        for seed in dict.fromkeys(urllib.parse.urljoin(seed, '/') for seed in seeds):
+            for path in ('/robots.txt', '/sitemap.xml'):
+                add(path, seed, 1, 'web-metadata', 'metadata')
     if api_paths:
         for seed in seeds:
             for path in ('/api', '/api/v1', '/openapi.json', '/swagger.json', '/api-docs'):
@@ -259,6 +289,15 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                     page['phpinfo_signature'] = True
                 if follow_redirects and page['status'] in (301, 302, 303, 307, 308) and headers.get('location'):
                     add(headers['location'], url, level + 1, url, 'redirect')
+                if 200 <= page['status'] < 300 and not page.get('truncated'):
+                    metadata_kind = next((r['kind'] for r in result['routes'] if r['url'] == url), '')
+                    path = urllib.parse.urlsplit(url).path.lower()
+                    if path == '/robots.txt':
+                        for value in robots_links(body.decode('utf-8', 'replace')):
+                            add(value, url, level + 1, url, 'robots')
+                    if path.endswith('.xml') or metadata_kind == 'sitemap':
+                        for value in sitemap_links(body):
+                            add(value, url, level + 1, url, 'sitemap')
                 if 200 <= page['status'] < 300 and (SCRIPT.search(urllib.parse.urlsplit(url).path)
                         or 'javascript' in headers.get('content-type', '').lower()):
                     for hint in route_literals(body.decode('utf-8', 'replace')):

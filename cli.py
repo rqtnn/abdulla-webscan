@@ -45,6 +45,7 @@ import evidence
 import assessment
 import advanced
 import reliability
+import whatweb_snapshot
 from transport import connection
 
 from brand import VERSION
@@ -53,20 +54,7 @@ ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
-REPORT_SCRIPT = """const search = document.getElementById('finding-search');
-const severity = document.getElementById('finding-severity');
-function filterFindings() {
-  let visible = 0;
-  document.querySelectorAll('[data-finding]').forEach(row => {
-    row.hidden = !(row.textContent.toLowerCase().includes(search.value.toLowerCase()) &&
-      (severity.value === 'all' || row.dataset.severity === severity.value));
-    if (!row.hidden) visible++;
-  });
-  document.getElementById('finding-count').textContent = visible + ' observations shown';
-}
-search.addEventListener('input', filterFindings);
-severity.addEventListener('change', filterFindings);
-filterFindings();"""
+REPORT_SCRIPT = (Path(__file__).resolve().parent / 'report.js').read_text(encoding='utf-8')
 
 
 def say(message):
@@ -209,6 +197,7 @@ class Job:
     timeout: int
     outputs: list[str] = dataclasses.field(default_factory=list)
     skip_reason: str = ""
+    snapshot: dict | None = None
 
 
 class Runner:
@@ -254,12 +243,19 @@ class Runner:
             record.update(status="cancelled", note="Run interrupted before starting.")
             return record
         binary = shutil.which(job.argv[0])
-        boundary_reason = self.web_skip_reason if job.tool != "nmap" else ""
+        boundary_reason = self.web_skip_reason if job.tool != "nmap" and not job.snapshot else ""
         if job.skip_reason or boundary_reason or not binary:
             record.update(status="skipped", note=job.skip_reason or boundary_reason or f"{job.argv[0]} is not installed/on PATH.")
             say(f"[SKIP] {job.name}: {record['note']}")
             return record
         start = time.monotonic()
+        if job.snapshot:
+            try:
+                whatweb_snapshot.prepare(job.snapshot, job.folder, self.stop, self.request_gate)
+            except (OSError, ValueError, http.client.HTTPException, InterruptedError) as exc:
+                record.update(status='failed', note='Pinned WhatWeb snapshot failed: ' + reliability.record('whatweb_snapshot', exc))
+                say('[WHATWEB] ' + record['note'])
+                return record
         say(f"[START] {job.name}")
         proc = None
         try:
@@ -299,6 +295,14 @@ class Runner:
                 with self.lock:
                     self.active.discard(proc)
             record["elapsed"] = round(time.monotonic() - start, 2)
+        if job.snapshot:
+            try:
+                whatweb_snapshot.remap(job.folder / 'results.json', job.snapshot['url'])
+                record['source_url'] = job.snapshot['url']
+                record['fingerprint_mode'] = 'pinned_http_snapshot'
+            except (OSError, ValueError, TypeError) as exc:
+                if record['status'] == 'completed':
+                    record.update(status='failed', note='WhatWeb snapshot output invalid: ' + reliability.record('whatweb_output', exc))
         say(f"[{record['status'].upper()}] {job.name} ({record['elapsed']}s)")
         return record
 
@@ -368,11 +372,11 @@ def build_jobs(args, root, urls, binaries):
         enum_path = parsed.path if parsed.path.endswith('/') else parsed.path.rsplit('/', 1)[0] + '/'
         enum_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, enum_path, '', ''))
 
-        def add(tool, parameters, outputs=(), reason=""):
+        def add(tool, parameters, outputs=(), reason="", snapshot=None):
             folder = prefix / tool
             jobs.append(Job(f"{tool} @ {url}", tool,
                             [binaries.get(tool) or ("httpx-toolkit" if tool == "httpx" else tool),
-                             *parameters(folder)], folder, timeout, list(outputs), reason))
+                             *parameters(folder)], folder, timeout, list(outputs), reason, snapshot))
 
         if "httpx" not in args.skip:
             add("httpx", lambda f: ["-u", url, "-nfs", "-sc", "-title", "-server", "-td",
@@ -381,8 +385,17 @@ def build_jobs(args, root, urls, binaries):
                 "ProjectDiscovery httpx/httpx-toolkit not found; Python HTTPX is a different tool."
                 if not binaries.get("httpx") and not args.dry_run else "")
         if "whatweb" not in args.skip:
+            try:
+                ipaddress.ip_address(parsed.hostname)
+                snapshot = None
+            except ValueError:
+                snapshot = dict(url=url, scan_ip=getattr(args, 'scan_ip', None), insecure=args.insecure,
+                                timeout=args.http_timeout)
             add("whatweb", lambda f: ["-a", "1", "--follow-redirect=never", "--color=never",
-                                     "--log-json=" + str(f / "results.json"), url], ["results.json"])
+                                     "--max-threads=1", "--open-timeout=" + str(args.http_timeout),
+                                     "--read-timeout=" + str(args.http_timeout),
+                                     "--log-json=" + str(f / "results.json"),
+                                     str(f / 'response.http') if snapshot else url], ["results.json"], snapshot=snapshot)
         for tool in enum_names:
             if tool in args.skip:
                 continue
@@ -521,7 +534,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
         options = {'workers': args.http_workers, 'delay': args.delay,
                    'gate': getattr(args, 'request_gate', None), 'scan_ip': getattr(args, 'scan_ip', None),
                    'retain_raw': getattr(args, 'retain_raw_evidence', False), 'api_paths': True,
-                   'request_timeout': args.http_timeout}
+                   'request_timeout': args.http_timeout, 'metadata_paths': not getattr(args, 'no_web_metadata', False)}
         if args.crawl_redirects:
             options['follow_redirects'] = True
         if getattr(args, 'session', None):
@@ -752,7 +765,7 @@ def write_reports(root, summary):
         if finding.get('reproduction'):
             proof += '<details><summary>GET reproduction helper (credentials omitted)</summary><pre>' + esc(finding['reproduction']) + '</pre></details>'
         cve_label = ' | '.join(finding.get('cve_ids', []))
-        finding_rows.append(f'<tr data-finding data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small><br><small>{esc(cve_label)}</small></td><td>{esc(finding["url"])}</td>'
+        finding_rows.append(f'<tr data-finding data-category="{esc(finding["category"])}" data-severity="{esc(str(finding["severity"]).lower())}"><td>{esc(finding["title"])}<br><small>{esc(finding["category"])}</small><br><small>{esc(cve_label)}</small></td><td>{esc(finding["url"])}</td>'
                             f'<td>{esc(finding["severity"])}</td><td>needs_validation</td><td>{links}</td>'
                             f'<td>{esc(finding.get("recommendation", ""))}{proof}</td></tr>')
     web_lead_rows = ''.join('<tr><td>' + str(row['priority']) + '</td><td>' + esc(row['focus']) +
@@ -827,7 +840,7 @@ not a validated penetration testing report. Each active web job uses its own rat
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
 <h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
-Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. External scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
+Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
 <h2>Grouped assessment findings</h2><p>Repeated header notes are grouped; individual URLs and raw evidence remain below.</p>
@@ -840,7 +853,11 @@ POST forms, JavaScript execution and authenticated workflows require separate re
 Distinct checks, queries, schemes, ports and HTTP statuses remain separate.</p>
 <label for="finding-search">Search findings</label><input id="finding-search" type="search" placeholder="Service, URL, title or recommendation">
 <label for="finding-severity">Severity</label><select id="finding-severity"><option value="all">All</option>
-{''.join(f'<option value="{s}">{s.title()}</option>' for s in ranks)}</select><p id="finding-count" aria-live="polite"></p>
+{''.join(f'<option value="{s}">{s.title()}</option>' for s in ranks)}</select>
+<label for="finding-category">Type</label><select id="finding-category"><option value="all">All observations</option>
+<option value="scanner_match">Vulnerability candidates</option><option value="configuration">Configuration</option>
+<option value="technology">Technologies</option><option value="endpoint">Endpoints</option></select>
+<button id="finding-reset" type="button">Reset filters</button><p id="finding-count" aria-live="polite"></p>
 <div class="scroll"><table><tr><th>Observation</th><th>URL</th><th>Scanner severity</th><th>Validation</th><th>Evidence</th><th>Recommended review/remediation</th></tr>
 {''.join(finding_rows)}</table></div><h2>Parsing and manual review gaps</h2><ul>{issues}</ul>
 <h2 id="tls">TLS certificate and connection assessment</h2><p>Status: {esc(summary.get('network_assessment', {}).get('status', 'not_run'))}.
@@ -913,6 +930,7 @@ def parser():
     p.add_argument('--crawl-pages', type=positive, default=100, help='Maximum crawler GET requests, default 100.')
     p.add_argument('--crawl-depth', type=positive, default=3, help='Maximum link depth, default 3.')
     p.add_argument('--crawl-timeout', type=positive, default=120, help='Crawler time budget in seconds, default 120.')
+    p.add_argument('--no-web-metadata', action='store_true', help='Do not seed robots.txt/sitemap.xml during crawling.')
     p.add_argument('--crawl-redirects', action='store_true', help='Follow same-origin, non-action redirects within crawl budgets.')
     p.add_argument('--cookie-file', type=Path, help='One Cookie header value; built-in crawler/checks only, target URL origin required.')
     p.add_argument('--no-auto-sqli', action='store_true', help='Inventory GET parameters without automatic SQLmap checks.')
@@ -1090,6 +1108,7 @@ def _main(argv=None):
     if not args.external_tools and not args.dry_run:
         runner.web_skip_reason = 'External scanners disabled by default; use --external-tools with --retain-raw-evidence for numeric IP targets.'
     args.request_gate = RequestGate(args.rate, args.delay)
+    runner.request_gate = args.request_gate
     summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
                "input_url": args.input_url, "scan_ip": args.scan_ip,
                "created": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -1099,7 +1118,7 @@ def _main(argv=None):
     summary['built_in_http'] = {'workers': args.http_workers, 'delay': args.delay, 'rate': args.rate,
                                'time_checks_workers': 1 if args.time_sqli else None}
     summary['external_scanners'] = {'enabled': args.external_tools,
-        'policy': 'Numeric IP targets only; explicit raw-evidence opt-in; serialized jobs with per-tool pacing.'}
+        'policy': 'Numeric IP targets for remote adapters; WhatWeb hostname snapshots are pinned; explicit raw-evidence opt-in; serialized jobs.'}
     summary['scan_plan'] = scan_modes.plan(args)
     if args.compare:
         try:
