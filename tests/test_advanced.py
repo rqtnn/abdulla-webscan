@@ -1,4 +1,4 @@
-"""WS-R failure handling and advanced checks against an isolated loopback lab."""
+"""The World Is Yours failure handling and advanced checks against an isolated loopback lab."""
 import base64
 import contextlib
 import hashlib
@@ -245,7 +245,7 @@ class AdvancedTests(unittest.TestCase):
                 '--no-crawl', '--no-auto-sqli', '--api-discovery', '--rate', '50',
                 '--output', str(self.root / 'report.html'), '--log-file', str(self.root / 'run.log')])
         self.assertEqual(code, 0, output.getvalue())
-        self.assertEqual(output.getvalue().count('WS-R'), 1)
+        self.assertEqual(output.getvalue().count('The World Is Yours'), 1)
         self.assertIn('Advanced API and context inventory', (self.root / 'report.html').read_text())
         summary = json.loads(next((self.root / 'report.evidence').rglob('summary.json')).read_text())
         self.assertEqual(summary['advanced']['status'], 'completed')

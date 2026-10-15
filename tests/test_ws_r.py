@@ -1,4 +1,4 @@
-"""WS-R concurrency, detection, presentation and export regression tests."""
+"""The World Is Yours concurrency, detection, presentation and export regression tests."""
 import contextlib
 import hashlib
 import html
@@ -224,7 +224,7 @@ class WSRTests(unittest.TestCase):
         evidence = self.root / 'evidence'
         evidence.mkdir()
         (evidence / 'summary.json').write_text('{"findings": []}')
-        (evidence / 'report.html').write_text('<h1>WS-R</h1><a href="crawl/crawl.json">Evidence</a>')
+        (evidence / 'report.html').write_text('<h1>The World Is Yours</h1><a href="crawl/crawl.json">Evidence</a>')
         cli.export_reports(evidence, self.root / 'report.html')
         self.assertIn('href="evidence/crawl/crawl.json"', (self.root / 'report.html').read_text())
         cli.export_reports(evidence, self.root / 'report.json')
@@ -262,7 +262,7 @@ class WSRTests(unittest.TestCase):
             ui = terminal.TerminalUI('plain')
             ui.message(terminal.BANNER)
             ui.severity_table({'high': 2})
-        self.assertIn('WS-R', output.getvalue())
+        self.assertIn('The World Is Yours', output.getvalue())
         self.assertIn('high=2', output.getvalue())
 
     @unittest.skipUnless(importlib.util.find_spec('rich'), 'Optional Rich dependency not installed')
@@ -279,7 +279,7 @@ class WSRTests(unittest.TestCase):
         ui.severity_table({'critical': 1, 'low': 2})
         self.assertIn('[bold]untrusted target[/bold]', output.getvalue())
         self.assertIn('Critical', output.getvalue())
-        self.assertEqual(output.getvalue().count('WS-R'), 1)
+        self.assertEqual(output.getvalue().count('The World Is Yours'), 1)
 
     def test_rich_absence_falls_back_to_plain(self):
         import builtins
@@ -292,6 +292,6 @@ class WSRTests(unittest.TestCase):
 
         with patch('builtins.__import__', side_effect=no_rich), contextlib.redirect_stdout(io.StringIO()) as output:
             ui = terminal.TerminalUI('rich')
-            ui.message('WS-R')
+            ui.message('The World Is Yours')
         self.assertIsNone(ui.console)
-        self.assertIn('WS-R', output.getvalue())
+        self.assertIn('The World Is Yours', output.getvalue())
