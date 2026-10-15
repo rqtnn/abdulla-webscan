@@ -225,14 +225,14 @@ class SecurityRegressions(unittest.TestCase):
                 for secret in (b'FORM_SECRET', b'HEADER_SECRET', b'BODY_SECRET', b'LINK_SECRET'):
                     self.assertNotIn(secret, file.read_bytes(), str(file))
 
-    def test_external_scanners_deferred_for_hostname(self):
+    def test_remote_scanners_deferred_for_hostname(self):
         cli_platform(self)
         with patch.object(scope, 'resolve_one', return_value='127.0.0.1'), \
              patch.object(cli, 'tool_paths', return_value={'httpx': '/bin/false'}), \
              patch.object(cli.subprocess, 'Popen', side_effect=AssertionError('external scanner')), \
              contextlib.redirect_stdout(io.StringIO()):
             code = cli.main([self.base, '--assessment', 'full', '--profile', 'standard', '--external-tools', '--retain-raw-evidence', '--no-crawl',
-                '--skip', 'nmap', '--output', str(self.root / 'runs')])
+                '--skip', 'nmap', 'whatweb', '--output', str(self.root / 'runs')])
         self.assertEqual(code, 2)
         document = json.loads(next((self.root / 'runs').glob('*/summary.json')).read_text())
         self.assertTrue(all(j['status'] == 'skipped' for j in document['jobs'] if j['tool'] != 'network'))
