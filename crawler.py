@@ -15,6 +15,7 @@ from transport import connection
 import evidence
 import reliability
 import jwt_analyzer
+import adaptive
 from brand import USER_AGENT
 
 from scope import normalize_url, origin, scoped_link, ACTION, RequestGate, resolve_one
@@ -279,6 +280,7 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                         if time.monotonic() >= deadline:
                             raise TimeoutError('Crawl time budget reached')
                 body = response.pop('body')
+                page['recon'] = adaptive.inspect(url, response['headers'], body.decode('utf-8', 'replace'))
                 page['jwt'] = jwt_analyzer.discover(body.decode('utf-8', errors='replace'))
                 page.update(response)
                 page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))

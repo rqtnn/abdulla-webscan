@@ -1,3 +1,12 @@
+# 4.2.0 — Reconnaissance-led web assessment and conditional WPScan
+
+- Map HTTP fingerprints, routes and forms before follow-up checks; reuse the crawl instead of requesting it twice.
+- Persist an evidence-based per-origin plan in reconnaissance.json and HTML/JSON reports; keep unknown stacks explicit and --only isolated.
+- Add language-specific directory extensions and WordPress subdirectory detection without treating frontend JavaScript as backend evidence.
+- Add opt-in external Ruby WPScan passive inventory on detected WordPress targets, strict JSON attribution, API coverage diagnostics and exit-code-5 handling.
+- Isolate WPScan configuration, preserve existing scope/raw-evidence controls, and report missing tools, hostname restrictions and failures explicitly.
+- Linux regression coverage for positive/negative fingerprints, stage ordering, WordPress gating, process behavior and report evidence.
+
 # 4.1.0 — Pinned WhatWeb and web discovery
 
 - Fix menu 5 silently deferring hostname targets: WhatWeb Ruby plugins analyze locally captured, DNS-pinned HTTP packet files; remap findings to the real URL and state passive-only coverage.

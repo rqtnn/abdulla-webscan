@@ -36,7 +36,7 @@ class TerminalUI:
     def _scan_selection(self):
         from scan_modes import TOOLS, EXTERNAL, parse_ports
         self.message('Choose scan after entering the target:')
-        for option in ('1 Web vulnerability assessment', '2 Web on ports 80/443', '3 Quick web assessment',
+        for option in ('1 Reconnaissance then adaptive web assessment', '2 Web on ports 80/443', '3 Quick web assessment',
                        '4 Discover web services (Nmap only)', '5 WhatWeb only', '6 Crawl only',
                        '7 Choose individual tools', '8 All TCP ports (1-65535)',
                        '9 Web on custom port(s)', '10 CTF web checks (includes arithmetic SSTI)'):

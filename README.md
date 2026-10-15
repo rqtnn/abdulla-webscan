@@ -1,6 +1,6 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.1.0**.
+Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.2.0**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
 
@@ -19,7 +19,7 @@ python3 twiy.py
 
 ## Scan menu
 
-1. Web vulnerability assessment
+1. Reconnaissance then adaptive web assessment
 2. Web on ports 80/443
 3. Quick web assessment
 4. Discover web services (Nmap only)
@@ -86,3 +86,32 @@ CI uses one Linux job with Python 3.12, including loopback integration for insta
 ## Languages and review workflow
 
 Python coordinates bounded requests and evidence. Ruby WhatWeb provides the established passive plugin engine. Go-based Nuclei/httpx and Rust-based Feroxbuster remain optional external scanners. Bash handles Linux setup, and the separately maintained `report.js` filters HTML observations by type, severity and literal text, with a reset button. Reports embed that JavaScript and remain portable/offline; Node is required only for its developer tests.
+
+
+## Reconnaissance before follow-up (4.2)
+
+The default web workflow now has three phases: discover responding HTTP services, fingerprint the responses and map bounded routes/forms, then select follow-up checks. Existing controls, request budgets, cancellation, and explicit `--only` selections still apply. `reconnaissance.json`, the terminal, and the HTML/JSON reports show the observed stack, evidence labels, route extensions and next verification steps. `--no-adaptive` retains the fixed generic workflow.
+
+PHP, ASP.NET and Java evidence adds `.php`, `.aspx`/`.ashx` or `.jsp` candidates to enabled directory tools. Python, Ruby and Express indicators add stack-specific review guidance. These are HTTP hints, not proof of a backend language; frontend JavaScript alone does not imply Node.js. Unknown sites keep generic checks. SQLi checks still require actual discovered GET parameters, regardless of guessed language.
+
+### Conditional WordPress / WPScan
+
+WPScan is selected after a WordPress generator marker, paired same-origin `wp-content`/`wp-includes` assets, or a WordPress WhatWeb plugin match. Subdirectory installations are retained. A tutorial mentioning WordPress, a single asset or external CDN links do not trigger it. It runs only on WordPress targets and uses passive core/plugin/theme inventory (`p,t`); no user/password enumeration or automatic exploitation.
+
+```bash
+# Install WPScan separately on Kali, then prepare its metadata database:
+sudo apt install wpscan
+wpscan --update
+
+# Adaptive web assessment with installed external scanners and raw evidence:
+python3 twiy.py http://192.168.56.101 --external-tools --retain-raw-evidence
+
+# Isolate WPScan: first inspect the HTTP response, then scan only if WordPress is detected:
+python3 twiy.py http://192.168.56.101/blog/ --only wpscan --retain-raw-evidence
+```
+
+WPScan retains the existing external-adapter boundary: numeric-IP targets only; hostname runs record an explicit skipped task because WPScan cannot preserve the pinned hostname/TLS identity through this adapter. Use the site's intended numeric-IP lab virtual host for WPScan, or run WPScan independently with your own hostname configuration. Cookie/account scans do not pass credentials to WPScan. Do not replace a hostname with an IP if the server requires the hostname virtual host.
+
+A missing executable, missing database, abort, timeout or invalid output is reported as a gap. WPScan does not update/download databases during a scan. It runs with an isolated home/config directory so existing WPScan `scan.yml` files cannot add password attacks or scope changes; the existing metadata cache is reused. To enable advisory data, configure `WPSCAN_API_TOKEN` in your own environment (never commit it). No token/API failure means **inventory only**, not “no vulnerabilities”. WPScan's advisory matches remain unvalidated candidates; version banners do not manufacture CVEs. Review WPScan's own licensing before commercial use.
+
+The WPScan adapter is covered by deterministic JSON/process fixtures and loopback workflow tests. It has not been exercised against a real installed WPScan release in this environment; version-specific CLI/database compatibility is reported through task diagnostics.
