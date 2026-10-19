@@ -25,3 +25,13 @@ The default never runs shell commands on the target or extracts its database. XS
 ## 4.1 additions
 
 The Sn1per web/JavaScript workflow review led to scoped robots, sitemap-index and source-map-reference inventory. WhatWeb's native HTTP packet-file support (see [official Target implementation](https://github.com/urbanadventurer/WhatWeb/blob/master/lib/target.rb)) enables passive Ruby plugins without a second hostname resolution. It does not provide URL/DNS/TLS plugin coverage. Bash setup and JavaScript report filters have no effect on scan scope or vulnerability confirmation.
+
+## WPScan (4.2.0)
+
+Optional Ruby adapter, detected by `--check`. Automatic selection needs an observed WordPress hint;
+explicit `--only wpscan` is also supported. It runs after bounded discovery with passive component
+checks and explicit `vp,vt` enumeration, no user/password enumeration. External evidence and numeric-IP
+rules apply. Results include informational component inventory and supplied vulnerability metadata;
+WPScan API/local database configuration controls enrichment. Review `technology-plan.json` and task
+status for coverage. The executable is optional and adapter tests use a process fixture; a real WPScan
+installation is required to assess version-specific CLI behavior.

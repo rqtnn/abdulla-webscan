@@ -1,7 +1,7 @@
 """Explicit scan plans. Selected tools cannot silently launch unrelated stages."""
 import re
 
-EXTERNAL = ('httpx', 'whatweb', 'ffuf', 'gobuster', 'feroxbuster', 'dirsearch', 'nikto', 'nuclei', 'sqlmap')
+EXTERNAL = ('httpx', 'whatweb', 'ffuf', 'gobuster', 'feroxbuster', 'dirsearch', 'nikto', 'nuclei', 'sqlmap', 'wpscan')
 TOOLS = ('nmap', *EXTERNAL, 'crawl', 'checks', 'files', 'cors', 'api', 'tls')
 
 

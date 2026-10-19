@@ -45,13 +45,14 @@ import evidence
 import assessment
 import advanced
 import reliability
+import technology
 import whatweb_snapshot
 from transport import connection
 
 from brand import VERSION
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
-ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap")
+ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap", "wpscan")
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
 REPORT_SCRIPT = (Path(__file__).resolve().parent / 'report.js').read_text(encoding='utf-8')
@@ -173,8 +174,9 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
         except (OSError, http.client.HTTPException) as exc:
             # A slow/broken body does not erase an already observed HTTP response.
             body, body_error = '', 'Response headers received; body read failed: ' + str(exc)[:400]
+        hints = technology.detect(url, response.getheaders(), body)
         title = re.search(r"<title[^>]*>(.*?)</title>", body, re.I | re.S)
-        result = {"url": url, "status": response.status, 'request': request, 'headers': [list(p) for p in response.getheaders()], "server": response.getheader("Server", ""),
+        result = {"url": url, "status": response.status, "technologies": hints, 'request': request, 'headers': [list(p) for p in response.getheaders()], "server": response.getheader("Server", ""),
                 "title": html.unescape(re.sub(r"\s+", " ", title.group(1))).strip() if title else "",
                 "location": response.getheader("Location", ""), "retry_after": response.getheader("Retry-After", ""), "tls_verified": u.scheme == "https" and not insecure}
         if body_error:
@@ -280,8 +282,8 @@ class Runner:
                         break
                 record["exit_code"] = proc.returncode
                 if record["status"] == "planned":
-                    record["status"] = "completed" if proc.returncode == 0 else "failed"
-                    if proc.returncode != 0:
+                    record["status"] = "completed" if proc.returncode == 0 or (job.tool == "wpscan" and proc.returncode == 5) else "failed"
+                    if record["status"] == "failed":
                         record["note"] = "See console.log for scanner errors/version incompatibilities."
         except Exception as exc:
             record.update(status="failed", note='Execution error: ' + reliability.record('subprocess_execution', exc))
@@ -436,6 +438,38 @@ def build_jobs(args, root, urls, binaries):
                 f'No YAML templates at {templates}; run nuclei -ut -ud "{templates}" first, or use --templates.'
                 if (not templates.is_dir() or next(templates.rglob('*.yaml'), None) is None) and not args.dry_run else "")
     return jobs
+
+
+def run_technology_plan(args, root, live, summary, runner, binaries):
+    """Fingerprint first; specialized adapters run after bounded route discovery."""
+    observed, _ = collect(root, summary)
+    view = dict(summary, findings=observed)
+    summary['technology_plan'] = technology.plan(live, view)
+    (root / 'technology-plan.json').write_text(evidence.dumps(summary['technology_plan']), encoding='utf-8')
+    for index, row in enumerate(summary['technology_plan'], 1):
+        if 'wpscan' in args.skip:
+            row.update(wpscan='disabled', reason='WPScan disabled by tool selection or external-scanner policy.')
+            continue
+        explicit = 'wpscan' in (args.only or [])
+        if row['wpscan'] != 'eligible' and not explicit:
+            continue
+        reason = ''
+        folder = root / f'web-{index:02d}' / 'wpscan'
+        argv = [binaries.get('wpscan') or 'wpscan', '--url', row['url'],
+                '--format', 'json', '--output', str(folder / 'results.json'),
+                '--no-update', '--ignore-main-redirect', '--enumerate', 'vp,vt', '--detection-mode', 'passive',
+                '--plugins-detection', 'passive', '--plugins-version-detection', 'passive',
+                '--max-threads', '1', '--throttle', str(max(1, int(1000 / args.rate))),
+                '--request-timeout', str(args.http_timeout), '--connect-timeout', str(args.http_timeout)]
+        if args.insecure:
+            argv.append('--disable-tls-checks')
+        job = runner.execute(Job('wpscan @ ' + row['url'], 'wpscan', argv, folder,
+                                 args.tool_timeout, ['results.json'], reason))
+        summary['jobs'].append(job)
+        row['wpscan'] = job['status']
+        row['reason'] = job['note'] or ('Explicit tool selection.' if explicit else row['reason'])
+        row['coverage_note'] = 'Passive inventory only; vulnerability metadata requires a configured WPScan API token or database. Empty results do not establish safety.'
+    (root / 'technology-plan.json').write_text(evidence.dumps(summary['technology_plan']), encoding='utf-8')
 
 
 def sqlmap_job(args, root, url, parameter, name, automatic=False):
@@ -735,6 +769,10 @@ def write_reports(root, summary):
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
+    technology_rows = ''.join('<tr><td>' + esc(row['url']) + '</td><td>' +
+        esc(', '.join(sorted({s['name'] for s in row['technologies']})) or 'Unknown') +
+        '</td><td>' + esc(row['wpscan']) + '</td><td>' + esc(row['reason']) + '</td></tr>'
+        for row in summary.get('technology_plan', []))
     port_rows = "".join("<tr>" + "".join(f"<td>{esc(p.get(k, ''))}</td>" for k in
                                      ("port", "service", "product", "version", "extrainfo", "method", "cpe")) + "</tr>"
                         for p in summary["ports"])
@@ -839,6 +877,7 @@ Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an e
 not a validated penetration testing report. Each active web job uses its own rate cap;
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
+<h2>Technology follow-up plan</h2><p>Passive WordPress inventory; vulnerability metadata needs a configured WPScan API token or database. Unknown technologies and empty results leave coverage gaps.</p><table><tr><th>URL</th><th>Observed technologies</th><th>WPScan</th><th>Reason</th></tr>{technology_rows}</table>
 <h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
@@ -1246,6 +1285,11 @@ def _main(argv=None):
             summary['jobs'].append(dict(name='Built-in web assessment', tool='checks', argv=[],
                 command='', folder=str(root), outputs=[], status='incomplete', elapsed=0,
                 note=reliability.record('web_stage', exc)))
+        if live and not runner.stop.is_set():
+            try:
+                run_technology_plan(args, root, live, summary, runner, binaries)
+            except Exception as exc:
+                stage_failure(summary, root, 'Technology follow-up plan', 'wpscan', exc)
         if live and not args.dry_run and not runner.stop.is_set() and (any((args.api_discovery, args.contexts, args.idor, args.ssrf_canary, args.ssrf_metadata)) or any(page.get('jwt') for page in summary.get('crawl', {}).get('pages', []))):
             say('[ADVANCED] Scoped API inventory and bounded GET comparisons')
             folder = root / 'advanced'

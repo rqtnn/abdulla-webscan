@@ -7,6 +7,7 @@ from pathlib import Path
 from scope import normalize_url
 from checks import security_headers
 import evidence
+import wpscan_adapter
 from web_review import nuclei_metadata
 
 
@@ -71,6 +72,9 @@ def observations(tool, row, base, scan_ip=None):
         for item in row.get('vulnerabilities', []):
             check = str(item.get('id') or item.get('OSVDB') or item.get('msg', ''))
             yield 'scanner_match', check + ':' + item.get('method', 'GET'), urllib.parse.urljoin(base, item.get('url', '/')), item.get('msg', check), 'unknown'
+    elif tool == 'wpscan':
+        for category, check, title, severity, _ in wpscan_adapter.records(row):
+            yield category, check, base, title, severity
     elif tool == 'sqlmap':
         yield 'scanner_match', row['parameter'] + ':' + row['type'], base, row['title'], 'unknown'
     elif tool == 'crawler':
@@ -164,7 +168,9 @@ def collect(root, summary):
                             entry = merged.setdefault(key, {'id': hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16],
                                 'category': category, 'check': check, 'url': url, 'title': title,
                                 'severity': severity, 'validation_status': 'needs_validation', 'evidence': []})
-                            if tool == 'sqlmap':
+                            if tool == 'wpscan':
+                                entry.update(wpscan_adapter.metadata(row, check))
+                            elif tool == 'sqlmap':
                                 entry['recommendation'] = 'Reproduce with a control request; if validated, use parameterized database queries and restrict database account privileges.'
                             elif check.startswith('server-template-evaluation'):
                                 entry['recommendation'] = 'Treat user input as template data, never template source; use fixed templates and restrict template environment capabilities.'

@@ -1,3 +1,17 @@
+## 4.2.0 — Technology-driven WordPress follow-up
+
+- Capture passive CMS/runtime hints during existing discovery and crawl requests; scope follow-up
+  decisions to the observed HTTP origin and accept parsed WhatWeb WordPress fingerprints.
+- Add conditional WPScan after discovery, `--only wpscan`, `--skip wpscan`, dependency diagnostics,
+  and a persisted/HTML technology plan explaining disabled, deferred, skipped or completed work.
+- Bound the optional adapter with passive plugin/theme detection, `vp,vt` enumeration, one thread,
+  request timeouts, throttling, and the existing subprocess cancellation/time limit.
+- Parse core/plugin/theme inventory and reported vulnerability/CVE metadata offline. Preserve unknown
+  severity and evidence hashes; never infer CVEs from detected versions. Treat WPScan exit 5 as
+  completed with matches, while aborted output remains a parsing gap.
+- Retain existing numeric-IP/external-raw-evidence rules. API/database availability and incomplete
+  technology detection are documented coverage limits.
+
 # 4.1.0 — Pinned WhatWeb and web discovery
 
 - Fix menu 5 silently deferring hostname targets: WhatWeb Ruby plugins analyze locally captured, DNS-pinned HTTP packet files; remap findings to the real URL and state passive-only coverage.
