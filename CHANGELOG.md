@@ -1,3 +1,15 @@
+## 4.2.1 — Protocol discovery and empty-result coverage
+
+- Skip redundant generated HTTP/HTTPS alternatives once a port is identified; keep explicit URL
+  attempts and fallback after transport failures or protocol/upgrade responses. Classify TLS
+  certificate failures separately and never disable verification automatically.
+- Follow same-origin non-action redirects by default in CLI crawling, with `--no-crawl-redirects`
+  opt-out. Retain request budgets and exclude cross-origin/sensitive/action redirects.
+- Explain no GET parameters, blocked TLS, uncrawled redirects, deferred forms and disabled external
+  scanners in terminal/HTML/JSON coverage diagnostics, including offline report rebuilds.
+- Add loopback end-to-end regressions for canonical redirects, parameter discovery and avoiding
+  redundant HTTPS on a responding HTTP port; no supplied public target is contacted in tests.
+
 ## 4.2.0 — Technology-driven WordPress follow-up
 
 - Capture passive CMS/runtime hints during existing discovery and crawl requests; scope follow-up

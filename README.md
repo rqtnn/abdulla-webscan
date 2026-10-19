@@ -1,6 +1,6 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.2.0**.
+Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.2.1**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
 
@@ -56,6 +56,31 @@ python3 twiy.py --report-only results/RUN_DIRECTORY
 python3 twiy.py 192.168.56.101 --compare results/PREVIOUS_RUN
 ```
 
+## Troubleshoot empty results and HTTP/TLS messages
+
+- Discovery skips a generated opposite-protocol URL after a successful response identifies a port,
+  reducing `https://HOST:80` wrong-version errors. Certificate verification failure identifies TLS
+  but blocks application coverage; it does not cause an automatic retry with verification disabled.
+  Explicit URLs are always attempted; timeouts, handshake failures and HTTP 400/426 still permit
+  protocol fallback.
+- CLI crawling follows safe same-origin redirects by default, so a `/directory` → `/directory/`
+  normalization no longer hides its links/forms. Redirects to another host, scheme or port remain
+  deferred even when another origin was already selected. All hops use existing rate/page/depth/time
+  budgets and origin-bound credentials. `crawler.crawl()` retains its direct-call opt-in default.
+- `no_candidates` means no eligible GET inputs were found and no parameter probes ran. Routes are
+  not parameters. POST/password forms, authentication and JavaScript-rendered routes may need manual
+  investigation; an empty candidate list does not establish safety.
+- The terminal and HTML report now show coverage diagnostics with next steps for TLS verification,
+  redirects not crawled, deferred forms, absent GET inputs and disabled external scanners. Offline
+  report rebuilds preserve these explanations. External tools remain explicit opt-in and need their
+  binaries installed: check with `python3 twiy.py --check`, then use
+  `--external-tools --retain-raw-evidence` on an authorized numeric-IP target if desired.
+
+For `CERTIFICATE_VERIFY_FAILED`, use the hostname that matches the certificate and ensure its CA is
+trusted. Only if an authorized lab deliberately uses a self-signed certificate should you explicitly
+select `--insecure`; this does not repair the certificate. A `301` is a redirect, not a failed scanner
+or evidence of a vulnerability. Review its `Location` and the coverage diagnostics.
+
 ## Technology-driven follow-up
 
 Discovery and crawl responses now retain small passive technology hints from generator metadata,
@@ -104,7 +129,7 @@ CTF arithmetic probes support `{{...}}` and `${...}`. Two independently generate
 
 Crawling now seeds `/robots.txt` and `/sitemap.xml` on each selected origin, follows concrete same-origin sitemap entries/indexes, and inventories JavaScript source-map references. All use the existing page/depth/time/rate budgets; wildcard robots rules, action paths, foreign origins and static source maps are not requested. Use `--no-web-metadata` to disable metadata seeds. Advertised/disallowed paths are discovery leads, never vulnerability findings by themselves.
 
-Built-in requests stay on one host, pin DNS resolution and do not follow redirects. WhatWeb selected via menu **5** also works for hostnames: the pinned HTTP transport saves a bounded HTTP packet, and WhatWeb's Ruby passive plugins analyze that local file. The original hostname/URL, Host header and TLS identity are preserved, and fingerprints are mapped back to that URL. Snapshot mode covers headers/body only, not URL/DNS/TLS plugins. Truncated or encoded packets are explicitly incomplete rather than treated as successful scans. Other external adapters remain opt-in for numeric IP targets. Use `--insecure` only when your lab deliberately uses a self-signed certificate. `--no-active-checks` disables input and CORS probes; `--profile standard` selects a lighter baseline. See `python3 twiy.py --help` for budgets and account-scoped options.
+Built-in requests stay on one host and pin DNS resolution. Discovery and active checks do not follow redirects; CLI crawling follows same-origin, non-action redirects within the existing budgets by default. Use `--no-crawl-redirects` to inventory them without following. Cross-host, scheme/port changes and sensitive/action redirects remain deferred. WhatWeb selected via menu **5** also works for hostnames: the pinned HTTP transport saves a bounded HTTP packet, and WhatWeb's Ruby passive plugins analyze that local file. The original hostname/URL, Host header and TLS identity are preserved, and fingerprints are mapped back to that URL. Snapshot mode covers headers/body only, not URL/DNS/TLS plugins. Truncated or encoded packets are explicitly incomplete rather than treated as successful scans. Other external adapters remain opt-in for numeric IP targets. Use `--insecure` only when your lab deliberately uses a self-signed certificate. `--no-active-checks` disables input and CORS probes; `--profile standard` selects a lighter baseline. See `python3 twiy.py --help` for budgets and account-scoped options.
 
 [Reviewed tools and integration details](WEB_TOOLS.md) · [Earlier Sn1per comparison](SN1PER_COMPARISON.md) · [Change history](CHANGELOG.md)
 

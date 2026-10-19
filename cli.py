@@ -46,6 +46,7 @@ import assessment
 import advanced
 import reliability
 import technology
+import scan_diagnostics
 import whatweb_snapshot
 from transport import connection
 
@@ -184,7 +185,7 @@ def probe(url, insecure=False, timeout=5, scan_ip=None):
         return result
     except Exception as exc:
         reliability.record('http_discovery', exc)
-        return {"url": url, "error": str(exc)[:500]}
+        return {"url": url, "error": str(exc)[:500], 'error_kind': scan_diagnostics.error_kind(exc)}
     finally:
         if conn:
             conn.close()
@@ -766,9 +767,13 @@ def write_reports(root, summary):
         except (OSError, ValueError, KeyError, TypeError) as exc:
             summary['comparison'] = dict(status='incomplete', error=type(exc).__name__)
         (root / 'comparison.json').write_text(evidence.dumps(summary['comparison']), encoding='utf-8')
+    summary['diagnostics'] = scan_diagnostics.explain(summary)
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
+    diagnostic_rows = ''.join('<li><strong>' + esc(row['code']) + '</strong> ' +
+        esc(row['url']) + ': ' + esc(row['message']) + ' ' + esc(row['action']) + '</li>'
+        for row in summary['diagnostics'])
     technology_rows = ''.join('<tr><td>' + esc(row['url']) + '</td><td>' +
         esc(', '.join(sorted({s['name'] for s in row['technologies']})) or 'Unknown') +
         '</td><td>' + esc(row['wpscan']) + '</td><td>' + esc(row['reason']) + '</td></tr>'
@@ -877,6 +882,7 @@ Skipped, failed, timeout and cancelled jobs leave gaps in coverage. This is an e
 not a validated penetration testing report. Each active web job uses its own rate cap;
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
+<h2>Coverage diagnostics</h2><ul>{diagnostic_rows}</ul>
 <h2>Technology follow-up plan</h2><p>Passive WordPress inventory; vulnerability metadata needs a configured WPScan API token or database. Unknown technologies and empty results leave coverage gaps.</p><table><tr><th>URL</th><th>Observed technologies</th><th>WPScan</th><th>Reason</th></tr>{technology_rows}</table>
 <h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
@@ -970,7 +976,11 @@ def parser():
     p.add_argument('--crawl-depth', type=positive, default=3, help='Maximum link depth, default 3.')
     p.add_argument('--crawl-timeout', type=positive, default=120, help='Crawler time budget in seconds, default 120.')
     p.add_argument('--no-web-metadata', action='store_true', help='Do not seed robots.txt/sitemap.xml during crawling.')
-    p.add_argument('--crawl-redirects', action='store_true', help='Follow same-origin, non-action redirects within crawl budgets.')
+    redirects = p.add_mutually_exclusive_group()
+    redirects.add_argument('--crawl-redirects', dest='crawl_redirects', action='store_true', default=True,
+                           help='Follow same-origin, non-action redirects within crawl budgets (default).')
+    redirects.add_argument('--no-crawl-redirects', dest='crawl_redirects', action='store_false',
+                           help='Inventory redirects without following them during crawling.')
     p.add_argument('--cookie-file', type=Path, help='One Cookie header value; built-in crawler/checks only, target URL origin required.')
     p.add_argument('--no-auto-sqli', action='store_true', help='Inventory GET parameters without automatic SQLmap checks.')
     p.add_argument('--max-sqli-jobs', type=positive, default=10, help='Maximum discovered URL/parameter checks, default 10.')
@@ -1241,6 +1251,10 @@ def _main(argv=None):
         else:
             live = []
             for url in candidate_urls:
+                if scan_diagnostics.redundant_alternative(url, base_urls, summary['probes']):
+                    summary.setdefault('probe_skips', []).append(dict(url=url, reason='Opposite protocol already identified on this host/port.'))
+                    say('[HTTP SKIP] ' + evidence.url(url) + ': opposite protocol already identified on this port.')
+                    continue
                 if runner.stop.is_set():
                     break
                 try:
@@ -1261,7 +1275,7 @@ def _main(argv=None):
                         say(f"[HTTP WARNING] {evidence.url(url)}: {result['error']}")
                 else:
                     say(f"[HTTP ERROR] {evidence.url(url)}: {result.get('error', 'No response')}")
-                    if 'CERTIFICATE_VERIFY_FAILED' in result.get('error', ''):
+                    if scan_diagnostics.certificate_blocked(result):
                         say('[TLS] Certificate verification failed. Trust the lab CA, or explicitly use --insecure for a self-signed authorized lab.')
                 write_reports(root, summary)
             summary["outcome"] = f"{len(live)} responding HTTP(S) base URLs."
@@ -1339,6 +1353,7 @@ def _main(argv=None):
                 UI.whatweb_results(summary)
             if args.only != ['whatweb']:
                 UI.web_priorities(summary)
+                UI.coverage_diagnostics(summary)
                 UI.severity_table(summary['coverage']['severity_counts'])
                 UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")

@@ -123,6 +123,12 @@ class TerminalUI:
         if rows:
             self.message('[NEXT] Open report.html for controls, reproduction, remediation and CVE references.')
 
+    def coverage_diagnostics(self, summary):
+        for row in summary.get('diagnostics', []):
+            self.message('[COVERAGE] ' + row['code'] + ': ' + row['message'] +
+                         (' URL: ' + row['url'] if row['url'] else ''))
+            self.message('[NEXT] ' + row['action'])
+
     def completion(self, statistics, priority):
         self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '
                      'Open TCP ports={open_ports} | Candidate vulnerabilities={vulnerability_candidates} | '
