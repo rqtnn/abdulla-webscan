@@ -79,9 +79,10 @@ class WebWorkflow(unittest.TestCase):
                 '--output', tmp, '--log-file', tmp+'/log'])
             self.assertEqual(code, 0)
             urls = [c.args[0] for c in probe.call_args_list]
-            self.assertEqual(set(urls), {self.base+'/', self.base.replace('http:', 'https:')+'/'})
+            self.assertEqual(set(urls), {self.base+'/'})
             self.assertFalse(any('/old' in u or ':443/' in u for u in urls))
             summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
+            self.assertEqual(summary['probe_skips'][0]['url'], self.base.replace('http:', 'https:')+'/')
             self.assertEqual(summary['assessment_mode'], 'web')
             self.assertNotIn('network_assessment', summary)
 

@@ -150,8 +150,9 @@ class ScanModeTests(unittest.TestCase):
                 '--no-crawl', '--output', tmp, '--log-file', tmp + '/log'])
             self.assertEqual(code, 0)
             urls = [call.args[0] for call in probe.call_args_list]
-            self.assertEqual(set(urls), {'http://127.0.0.1:18081/', 'https://127.0.0.1:18081/'})
+            self.assertEqual(set(urls), {'http://127.0.0.1:18081/'})
             summary = json.loads(next(Path(tmp).glob('*/summary.json')).read_text())
+            self.assertEqual(summary['probe_skips'][0]['url'], 'https://127.0.0.1:18081/')
             self.assertEqual([row['port'] for row in summary['ports']], [22, 18081])
 
     def test_whatweb_empty_missing_and_failed_output_is_explicit(self):
