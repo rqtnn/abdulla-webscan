@@ -47,13 +47,14 @@ import advanced
 import reliability
 import technology
 import scan_diagnostics
+import web_engine
 import whatweb_snapshot
 from transport import connection
 
 from brand import VERSION
 UI = TerminalUI('plain')
 ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
-ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap", "wpscan")
+ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap", "wpscan", *web_engine.TOOLS)
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
 REPORT_SCRIPT = (Path(__file__).resolve().parent / 'report.js').read_text(encoding='utf-8')
@@ -306,6 +307,12 @@ class Runner:
             except (OSError, ValueError, TypeError) as exc:
                 if record['status'] == 'completed':
                     record.update(status='failed', note='WhatWeb snapshot output invalid: ' + reliability.record('whatweb_output', exc))
+        if job.tool == 'dalfox' and record['exit_code'] == 1 and record['status'] == 'failed':
+            record.update(status='completed', note='Dalfox exit 1: findings emitted; validation required.')
+        if job.tool in web_engine.TOOLS and record['status'] == 'completed':
+            note = web_engine.completion(job.tool, job.folder)
+            if note:
+                record.update(status='incomplete', note=note)
         say(f"[{record['status'].upper()}] {job.name} ({record['elapsed']}s)")
         return record
 
@@ -323,6 +330,8 @@ def tool_paths(dry_run=False, selected=None):
                 found["httpx"] = None
         except (OSError, subprocess.TimeoutExpired):
             found["httpx"] = None
+    if "testssl" in found:
+        found["testssl"] = shutil.which("testssl.sh") or found["testssl"]
     return found
 
 
@@ -439,6 +448,41 @@ def build_jobs(args, root, urls, binaries):
                 f'No YAML templates at {templates}; run nuclei -ut -ud "{templates}" first, or use --templates.'
                 if (not templates.is_dir() or next(templates.rglob('*.yaml'), None) is None) and not args.dry_run else "")
     return jobs
+
+
+def run_web_engines(args, root, live, summary, runner, binaries, selected=None):
+    """Discovery precedes crawling; Dalfox runs independently of SQLmap opt-out."""
+    phase = 'parameters' if selected is not None else 'discovery'
+    state = summary.setdefault('web_engines', {})
+    state.setdefault(phase, [])
+    if not args.external_tools or getattr(args, 'session', None):
+        state[phase + '_status'] = 'disabled' if not args.external_tools else 'authenticated_session_deferred'
+        return
+    compatibility = state.setdefault('compatibility', {})
+    tools = ('dalfox',) if selected is not None else ('katana', 'testssl')
+    for tool in tools:
+        if tool in args.skip or runner.stop.is_set():
+            continue
+        if tool == 'katana' and args.no_crawl and tool not in (args.only or []):
+            continue
+        if tool not in compatibility and not args.dry_run:
+            compatibility[tool] = web_engine.compatibility(tool, binaries.get(tool))
+        targets = [(entry['url'], entry['parameter']) for entry in selected] if selected is not None else [(url, None) for url in live]
+        if not targets:
+            state[phase].append(dict(tool=tool, status='no_candidates'))
+        for index, (url, parameter) in enumerate(targets, 1):
+            if tool == 'testssl' and not url.startswith('https://'):
+                continue
+            folder = root / 'web-engines' / tool / f'{index:03d}'
+            web_engine.prepare(tool, folder)
+            argv, output, reason = web_engine.command(tool, binaries.get(tool), url, folder, args, parameter)
+            result = runner.execute(Job(f'{tool} @ {url}', tool, argv, folder,
+                args.tool_timeout if tool != 'katana' else args.crawl_timeout,
+                [output], reason or compatibility.get(tool, '')))
+            summary['jobs'].append(result)
+            state[phase].append(dict(tool=tool, url=url, status=result['status'], reason=result.get('note', '')))
+            if runner.stop.is_set():
+                break
 
 
 def run_technology_plan(args, root, live, summary, runner, binaries):
@@ -559,7 +603,10 @@ def run_discovered(args, root, live, summary, runner, binaries):
         return
     observed, _ = collect(root, summary)
     allowed = {origin(url) for url in live}
-    seeds = live + [f['url'] for f in observed if f['category'] == 'endpoint'
+    engine_urls, engine_rejected = web_engine.discovered_urls(summary['jobs'], live, args.target, args.crawl_pages)
+    summary.setdefault('web_engines', {}).update(discovered=len(engine_urls), rejected=engine_rejected)
+    seeds = live + engine_urls + [f['url'] for f in observed if f['category'] == 'endpoint'
+                    and not any(e.get('tool') == 'katana' for e in f['evidence'])
                     and f['check'].isdigit() and 200 <= int(f['check']) < 400 and origin(f['url']) in allowed]
     folder = root / 'crawl'
     folder.mkdir(parents=True, exist_ok=True)
@@ -589,7 +636,7 @@ def run_discovered(args, root, live, summary, runner, binaries):
             'outputs': ['crawl.json'], 'status': summary['crawl']['status'],
             'elapsed': round(time.monotonic() - started, 2), 'exit_code': None,
             'note': ', '.join(summary['crawl']['limits'])})
-    urls = [url for url in summary['crawl']['discovered']
+    urls = [url for url in dict.fromkeys(summary['crawl']['discovered'] + engine_urls)
             if not urllib.parse.urlsplit(url).path.lower().endswith('.js')]
     (folder / 'urls.txt').write_text('\n'.join(evidence.url(u) for u in urls) + ('\n' if urls else ''), encoding='utf-8')
     selected, excluded = select_candidates(urls, args.max_sqli_jobs)
@@ -642,6 +689,10 @@ def run_discovered(args, root, live, summary, runner, binaries):
             stage_failure(summary, root, 'Discovered Nuclei stage', 'nuclei', exc)
     else:
         say('[NUCLEI] Discovered URL scan not run: disabled/skipped, authenticated session, or no additional routes.')
+    try:
+        run_web_engines(args, root, live, summary, runner, binaries, selected)
+    except Exception as exc:
+        stage_failure(summary, root, 'Dalfox parameter stage', 'dalfox', exc)
     if args.no_auto_sqli or 'sqlmap' in args.skip:
         summary['injection'].update(status='disabled', reason='SQLmap opt-out or external scanners disabled/skipped; built-in GET checks run independently.')
         say('[SQLMAP] ' + summary['injection']['reason'])
@@ -1293,6 +1344,10 @@ def _main(argv=None):
         binaries = tool_paths(args.dry_run, args.only) if not runner.stop.is_set() and args.assessment != 'network' else {}
         jobs = build_jobs(args, root, live, binaries)
         summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
+        try:
+            run_web_engines(args, root, live, summary, runner, binaries)
+        except Exception as exc:
+            stage_failure(summary, root, 'Complementary engine stage', 'katana', exc)
         try:
             run_discovered(args, root, live, summary, runner, binaries)
         except Exception as exc:

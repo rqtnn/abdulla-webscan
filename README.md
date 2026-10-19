@@ -1,6 +1,6 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.2.1**.
+Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.3.0**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
 
@@ -147,3 +147,22 @@ CI uses one Linux job with Python 3.12, including loopback integration for insta
 ## Languages and review workflow
 
 Python coordinates bounded requests and evidence. Ruby WhatWeb provides the established passive plugin engine. Go-based Nuclei/httpx and Rust-based Feroxbuster remain optional external scanners. Bash handles Linux setup, and the separately maintained `report.js` filters HTML observations by type, severity and literal text, with a reset button. Reports embed that JavaScript and remain portable/offline; Node is required only for its developer tests.
+## 4.3 complementary web engines
+
+Katana JavaScript discovery, Dalfox v3 GET XSS assessment and testssl.sh TLS
+protocol checks now join the existing Nuclei, SQLmap, WPScan, WhatWeb and directory
+adapters. Discovery exports feed scoped GET selection; scanner failures and
+partial results remain visible. See [commands and TLS behavior](WEB_TOOLS.md) and
+the [12-project upstream review](SN1PER_COMPARISON.md).
+
+```bash
+python3 twiy.py --check
+python3 twiy.py http://192.0.2.10 --scan web --external-tools --retain-raw-evidence --no-menu
+python3 twiy.py http://192.0.2.10 --only katana dalfox --retain-raw-evidence --no-menu
+```
+
+Replace the documentation IP with your authorized numeric-IP lab target.
+External binaries must be installed separately. Katana on HTTPS requires explicit
+`--insecure` because upstream does not verify certificates. Unsupported CLI
+versions are skipped with a reason. These integrations expand coverage; no
+benchmark establishing superiority over Sn1per has been performed.

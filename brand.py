@@ -1,4 +1,4 @@
 """Shared WS-R version and HTTP identity."""
 NAME = 'The World Is Yours'
-VERSION = '4.2.1'
+VERSION = '4.3.0'
 USER_AGENT = 'TWIY/' + VERSION

@@ -1,7 +1,7 @@
 """Explicit scan plans. Selected tools cannot silently launch unrelated stages."""
 import re
 
-EXTERNAL = ('httpx', 'whatweb', 'ffuf', 'gobuster', 'feroxbuster', 'dirsearch', 'nikto', 'nuclei', 'sqlmap', 'wpscan')
+EXTERNAL = ('httpx', 'whatweb', 'ffuf', 'gobuster', 'feroxbuster', 'dirsearch', 'nikto', 'nuclei', 'sqlmap', 'wpscan', 'katana', 'dalfox', 'testssl')
 TOOLS = ('nmap', *EXTERNAL, 'crawl', 'checks', 'files', 'cors', 'api', 'tls')
 
 
@@ -14,10 +14,10 @@ def default(args, argv, name, value):
 def apply(args, argv):
     args.only = list(dict.fromkeys(args.only)) if args.only else None
     chosen = set(args.only or [])
-    needs_crawl = bool(chosen & {'crawl', 'checks'} or 'sqlmap' in chosen and not args.sqlmap_url)
+    needs_crawl = bool(chosen & {'crawl', 'checks', 'dalfox'} or 'sqlmap' in chosen and not args.sqlmap_url)
     if needs_crawl and args.no_crawl:
         raise ValueError('Selected tools need crawling; remove --no-crawl or choose different tools')
-    if chosen & {'checks', 'cors'} and args.no_active_checks:
+    if chosen & {'checks', 'cors', 'dalfox'} and args.no_active_checks:
         raise ValueError('Selected checks conflict with --no-active-checks')
     if 'sqlmap' in chosen and args.no_auto_sqli and not args.sqlmap_url:
         raise ValueError('Automatic SQLmap selection conflicts with --no-auto-sqli')
@@ -60,7 +60,7 @@ def apply(args, argv):
     args.no_crawl = not needs_crawl
     args.no_auto_sqli = 'sqlmap' not in chosen or bool(args.sqlmap_url)
     args.active_checks = args.builtin_sqli = 'checks' in chosen
-    args.no_active_checks = not bool(chosen & {'checks', 'cors'})
+    args.no_active_checks = not bool(chosen & {'checks', 'cors', 'dalfox'})
     args.time_sqli = args.time_sqli and 'checks' in chosen
     args.sensitive_files = 'files' in chosen
     args.cors_checks = 'cors' in chosen
@@ -79,7 +79,7 @@ def apply(args, argv):
 def plan(args):
     requested = list(args.only or [])
     return dict(mode=args.scan, requested_tools=requested or ['profile:' + args.profile],
-                dependencies=['crawl_for_GET_parameters'] if not args.no_crawl and set(requested) & {'checks', 'sqlmap'} else [],
+                dependencies=['crawl_for_GET_parameters'] if not args.no_crawl and set(requested) & {'checks', 'sqlmap', 'dalfox'} else [],
                 external_raw_output=args.external_tools and args.retain_raw_evidence)
 
 

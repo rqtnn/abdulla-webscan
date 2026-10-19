@@ -4,10 +4,11 @@ import json
 import re
 import urllib.parse
 from pathlib import Path
-from scope import normalize_url
+from scope import normalize_url, origin
 from checks import security_headers
 import evidence
 import wpscan_adapter
+import web_engine
 from web_review import nuclei_metadata
 
 
@@ -49,7 +50,9 @@ def observations(tool, row, base, scan_ip=None):
     if not isinstance(row, dict):
         raise ValueError('Expected a result object')
     url = row.get('url') or row.get('target') or base
-    if tool in ('ffuf', 'feroxbuster', 'gobuster', 'dirsearch'):
+    if tool in web_engine.TOOLS:
+        yield from web_engine.observations(tool, row, base)
+    elif tool in ('ffuf', 'feroxbuster', 'gobuster', 'dirsearch'):
         if tool == 'feroxbuster' and row.get('type') != 'response':
             return
         if not row.get('url') and row.get('path'):
@@ -133,7 +136,9 @@ def collect(root, summary):
                     records = [(i, line) for i, line in enumerate(content.splitlines(), 1) if line.strip()]
                 else:
                     doc = json.loads(content)
-                    if tool == 'ffuf':
+                    if tool in web_engine.TOOLS:
+                        doc = web_engine.documents(tool, doc)
+                    elif tool == 'ffuf':
                         doc = doc['results']
                     elif tool == 'dirsearch':
                         results = doc['results']
@@ -164,12 +169,20 @@ def collect(root, summary):
                             row = json.loads(raw) if isinstance(raw, str) else raw
                         for category, check, url, title, severity in observations(tool, row, base, summary.get('scan_ip')):
                             url = normalize_url(url, summary['target'])
+                            if tool in web_engine.TOOLS and origin(url) != origin(base):
+                                raise ValueError('Engine result is outside its scheduled origin')
                             key = (category, check if category == 'endpoint' else tool + ':' + check, url)
                             entry = merged.setdefault(key, {'id': hashlib.sha256(json.dumps(key).encode()).hexdigest()[:16],
                                 'category': category, 'check': check, 'url': url, 'title': title,
                                 'severity': severity, 'validation_status': 'needs_validation', 'evidence': []})
                             if tool == 'wpscan':
                                 entry.update(wpscan_adapter.metadata(row, check))
+                            elif tool == 'dalfox':
+                                entry.update(detection_tier=row.get('type'), confidence=row.get('confidence'),
+                                    detection_method=row.get('detection_method'))
+                                entry['recommendation'] = 'Validate execution in a controlled browser; apply context-aware output encoding and safe DOM APIs.'
+                            elif tool == 'testssl':
+                                entry['recommendation'] = 'Review TLS protocol support; disable obsolete protocols while checking client compatibility.'
                             elif tool == 'sqlmap':
                                 entry['recommendation'] = 'Reproduce with a control request; if validated, use parameterized database queries and restrict database account privileges.'
                             elif check.startswith('server-template-evaluation'):
