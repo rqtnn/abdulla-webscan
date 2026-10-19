@@ -197,3 +197,13 @@ Verified locally: 84 tests, 79 passed and 5 POSIX-only tests skipped on Windows.
 Rich rendering was tested with Rich 14.3.4. Tests use local HTTP servers and
 scanner fixtures. Real Linux scanner executables and all POSIX tests still need
 verification under Kali/Linux/WSL before claiming deployment readiness.
+## 4.3.0 — 2026-10-19
+
+- Add Katana standard-mode JavaScript/route discovery feeding scoped GET selection.
+- Add Dalfox v3 per-parameter XSS assessment independently of SQLmap selection;
+  preserve tiers/confidence, findings exit code and incomplete coverage.
+- Add protocol-only testssl.sh adapter for HTTPS with JSON evidence and warning handling.
+- Check local CLI contracts, generate isolated engine profiles, retain origin/rate/time
+  controls and defer upstream insecure HTTPS Katana unless explicitly requested.
+- Document a focused 12-project upstream comparison, deferred integrations and commands.
+- Add process/format/scope tests and a controlled end-to-end discovery-to-XSS pipeline test.

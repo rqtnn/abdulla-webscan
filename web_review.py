@@ -93,6 +93,8 @@ def web_leads(findings):
         if finding.get('category') != 'scanner_match' or not finding.get('url', '').startswith(('http://', 'https://')):
             continue
         check = finding.get('check', '').lower()
+        if check.startswith(('dalfox-r:', 'dalfox-i:')):
+            continue  # Reflection alone is an observation, not an XSS lead.
         text = (check + ' ' + finding.get('title', '')).lower()
         if any(term in text for term in ('server-template', 'ssti', 'remote code', 'command injection', 'rce', 'deserialization')):
             focus, priority = 'Server-side execution candidate', 1
