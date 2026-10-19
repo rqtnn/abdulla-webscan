@@ -289,8 +289,18 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                         and b'phpinfo()' in body and b'PHP Version' in body
                         and (b'Configuration' in body or b'PHP Variables' in body)):
                     page['phpinfo_signature'] = True
-                if follow_redirects and page['status'] in (301, 302, 303, 307, 308) and headers.get('location'):
-                    add(headers['location'], url, level + 1, url, 'redirect')
+                if page['status'] in (301, 302, 303, 307, 308) and headers.get('location'):
+                    page['redirect'] = dict(location=evidence.url(urllib.parse.urljoin(url, headers['location'])),
+                                            decision='disabled')
+                    if follow_redirects:
+                        try:
+                            destination = scoped_link(headers['location'], url, target, {origin(url)})
+                            if any(SECRET.search(k) for k, _ in urllib.parse.parse_qsl(urllib.parse.urlsplit(destination).query)):
+                                raise ValueError('Sensitive redirect query requires manual review')
+                            page['redirect'].update(decision='queued', url=destination)
+                            add(destination, url, level + 1, url, 'redirect')
+                        except (ValueError, TypeError) as exc:
+                            page['redirect'].update(decision='excluded', reason=str(exc))
                 if 200 <= page['status'] < 300 and not page.get('truncated'):
                     metadata_kind = next((r['kind'] for r in result['routes'] if r['url'] == url), '')
                     path = urllib.parse.urlsplit(url).path.lower()
