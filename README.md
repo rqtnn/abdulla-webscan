@@ -1,6 +1,6 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.1.0**.
+Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.2.0**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
 
@@ -55,6 +55,42 @@ python3 twiy.py 192.168.56.101 --scan ctf --external-tools --retain-raw-evidence
 python3 twiy.py --report-only results/RUN_DIRECTORY
 python3 twiy.py 192.168.56.101 --compare results/PREVIOUS_RUN
 ```
+
+## Technology-driven follow-up
+
+Discovery and crawl responses now retain small passive technology hints from generator metadata,
+explicit technology headers and same-origin WordPress assets. Parsed WhatWeb fingerprints also feed
+an origin-scoped follow-up plan. Hints are observations, not proof of a product/version or vulnerability;
+unknown technology never suppresses the existing general checks.
+
+`technology-plan.json` and the HTML report explain the WPScan decision for each responding URL.
+With external scanners enabled, WPScan runs after discovery only when WordPress evidence exists.
+`--only wpscan` explicitly requests it even without a passive hint; WPScan still performs its own
+WordPress checks. `--skip wpscan` disables it. Hostnames retain the existing external-adapter
+restriction because WPScan cannot use the built-in DNS-pinned HTTP transport.
+
+```bash
+# Install optional WPScan on Kali, then check availability
+sudo apt install wpscan
+python3 twiy.py --check
+
+# Automatic WordPress follow-up when evidence is observed
+python3 twiy.py http://192.168.56.101 --external-tools --retain-raw-evidence
+
+# WPScan only, with the existing external scanner evidence policy
+python3 twiy.py http://192.168.56.101 --only wpscan --retain-raw-evidence
+```
+
+The adapter uses passive core/plugin/theme detection, explicit `vp,vt` enumeration, one thread,
+request timeouts, throttling and the existing process time budget. It does not request user enumeration
+or password attacks. WPScan exit code 5 means vulnerability matches were reported and is treated as
+completed; aborted/malformed output remains a coverage gap. Component inventory is informational;
+reported vulnerabilities require validation and retain unknown severity rather than an invented score.
+Only supplied CVE metadata is imported. Vulnerability enrichment needs a WPScan API token or supported
+local database configured in WPScan itself; this adapter does not provision credentials. Empty or
+unavailable vulnerability data does not establish safety. Updates are separate (`wpscan --update`);
+scans use `--no-update` for predictable runs. See the
+[official WPScan documentation](https://github.com/wpscanteam/wpscan/wiki/WPScan-User-Documentation).
 
 ## Read the results
 

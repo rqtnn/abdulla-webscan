@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from transport import connection
 import evidence
 import reliability
+import technology
 import jwt_analyzer
 from brand import USER_AGENT
 
@@ -279,6 +280,7 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                         if time.monotonic() >= deadline:
                             raise TimeoutError('Crawl time budget reached')
                 body = response.pop('body')
+                page['technologies'] = technology.detect(url, response.get('headers', []), body)
                 page['jwt'] = jwt_analyzer.discover(body.decode('utf-8', errors='replace'))
                 page.update(response)
                 page.update(evidence.save_body(folder, f'body-{number:04d}.bin', body, retain_raw))
