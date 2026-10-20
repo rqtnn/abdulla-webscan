@@ -4,6 +4,24 @@ Linux web vulnerability assessment for CTF labs and authorized single-host targe
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
 
+## Repository layout
+
+| Location | Contents |
+| --- | --- |
+| `twiy.py`, `ws_r.py` | Current and compatible launchers |
+| Root Python modules | Scanner, discovery and report implementation |
+| `docs/` | Tool integration notes and Sn1per comparison |
+| `assets/` | Embedded HTML report JavaScript |
+| `wordlists/` | Default discovery wordlist |
+| `examples/` | Account-context configuration example |
+| `scripts/` | Linux setup and diagnostics |
+| `tests/` | Python and JavaScript tests |
+| `.github/workflows/` | Linux CI |
+| `releases/`, `results/` | Generated archives and scan output (ignored by Git) |
+
+Start commands remain unchanged. Use `examples/contexts.example.json` as a
+configuration reference and `--wordlist /path/to/list.txt` for a custom wordlist.
+
 ## Start on Linux
 
 ```bash
@@ -176,7 +194,7 @@ Crawling now seeds `/robots.txt` and `/sitemap.xml` on each selected origin, fol
 
 Built-in requests stay on one host and pin DNS resolution. Discovery and active checks do not follow redirects; CLI crawling follows same-origin, non-action redirects within the existing budgets by default. Use `--no-crawl-redirects` to inventory them without following. Cross-host, scheme/port changes and sensitive/action redirects remain deferred. WhatWeb selected via menu **5** also works for hostnames: the pinned HTTP transport saves a bounded HTTP packet, and WhatWeb's Ruby passive plugins analyze that local file. The original hostname/URL, Host header and TLS identity are preserved, and fingerprints are mapped back to that URL. Snapshot mode covers headers/body only, not URL/DNS/TLS plugins. Truncated or encoded packets are explicitly incomplete rather than treated as successful scans. Other external adapters remain opt-in for numeric IP targets. Use `--insecure` only when your lab deliberately uses a self-signed certificate. `--no-active-checks` disables input and CORS probes; `--profile standard` selects a lighter baseline. See `python3 twiy.py --help` for budgets and account-scoped options.
 
-[Reviewed tools and integration details](WEB_TOOLS.md) · [Earlier Sn1per comparison](SN1PER_COMPARISON.md) · [Change history](CHANGELOG.md)
+[Reviewed tools and integration details](docs/WEB_TOOLS.md) · [Earlier Sn1per comparison](docs/SN1PER_COMPARISON.md) · [Change history](CHANGELOG.md)
 
 ## Tests and releases
 
@@ -191,14 +209,14 @@ CI uses one Linux job with Python 3.12, including loopback integration for insta
 
 ## Languages and review workflow
 
-Python coordinates bounded requests and evidence. Ruby WhatWeb provides the established passive plugin engine. Go-based Nuclei/httpx and Rust-based Feroxbuster remain optional external scanners. Bash handles Linux setup, and the separately maintained `report.js` filters HTML observations by type, severity and literal text, with a reset button. Reports embed that JavaScript and remain portable/offline; Node is required only for its developer tests.
+Python coordinates bounded requests and evidence. Ruby WhatWeb provides the established passive plugin engine. Go-based Nuclei/httpx and Rust-based Feroxbuster remain optional external scanners. Bash handles Linux setup, and the separately maintained `assets/report.js` filters HTML observations by type, severity and literal text, with a reset button. Reports embed that JavaScript and remain portable/offline; Node is required only for its developer tests.
 ## 4.3 complementary web engines
 
 Katana JavaScript discovery, Dalfox v3 GET XSS assessment and testssl.sh TLS
 protocol checks now join the existing Nuclei, SQLmap, WPScan, WhatWeb and directory
 adapters. Discovery exports feed scoped GET selection; scanner failures and
-partial results remain visible. See [commands and TLS behavior](WEB_TOOLS.md) and
-the [12-project upstream review](SN1PER_COMPARISON.md).
+partial results remain visible. See [commands and TLS behavior](docs/WEB_TOOLS.md) and
+the [12-project upstream review](docs/SN1PER_COMPARISON.md).
 
 ```bash
 python3 twiy.py --check
