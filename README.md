@@ -29,6 +29,27 @@ python3 twiy.py
 8. Discover all TCP ports, then assess HTTP/HTTPS services
 9. Web on custom ports: any port 1–65535, lists or ranges
 10. CTF web checks, including arithmetic SSTI comparisons
+11. Deep web assessment: up to 300 crawl requests, depth 5, 600 seconds of crawling,
+    30 GET parameter candidates and 300 seconds of built-in input checks. Explicit
+    CLI limits override these defaults; rate limits and origin scope still apply.
+
+```bash
+# Deep assessment of an authorized lab, with installed external scanners
+python3 twiy.py http://LAB_IP:8080 --scan deep --external-tools --retain-raw-evidence --no-menu
+```
+
+Run `python3 twiy.py --check` first: the deep plan does not install missing binaries
+or Nuclei templates. Use the lab's actual URL, port and application path. Add
+`--insecure` only for a deliberately self-signed lab. An IP hosting several virtual
+sites may require the intended hostname; an IP alone cannot identify every site.
+
+OpenAPI/Swagger discovery now inventories primitive GET query parameters from
+path and operation declarations, so API-only inputs reach built-in checks and
+enabled external adapters. Values are synthetic (`wsr`, `1`, `true`); schema
+credentials/examples, unresolved references, path templates and POST operations
+are not used. A seeded input may fail application validation; discovery does not
+prove the endpoint was fully tested. Named HTML submit buttons are preserved in
+GET form candidates so handlers gated by `submit=...` can be reached.
 
 Ports are editable, not fixed examples. Enter `8080`, `22,8080,8443` or `8000-8100`. Arabic digits and Arabic commas are accepted. If selected ports exclude the target URL port, the scanner uses the same host on the selected ports and drops the old URL path/query. It never adds the excluded port back. Cookie/account contexts require a matching origin instead.
 

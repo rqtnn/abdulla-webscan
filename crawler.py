@@ -48,6 +48,50 @@ def sitemap_links(body):
         if element.tag.rsplit('}', 1)[-1] == 'loc' and element.text and element.text.strip()))[:2000]
 
 
+def openapi_get_routes(spec):
+    """Inventory concrete GET routes and bounded, non-secret query inputs.
+
+    Do not resolve references, generate path identifiers or use credential examples.
+    Candidates pass through the crawler's normal origin/action and input checks.
+    """
+    paths = spec.get('paths', {})
+    if not isinstance(paths, dict):
+        return []
+    routes = []
+    for path, operations in list(paths.items())[:2000]:
+        if (not isinstance(path, str) or '{' in path or not isinstance(operations, dict)
+                or not isinstance(operations.get('get'), dict)):
+            continue
+        routes.append(path.lstrip('/'))
+        parameters = {}
+        for container in (operations, operations['get']):
+            items = container.get('parameters', [])
+            if not isinstance(items, list):
+                continue
+            for item in items[:100]:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get('name')
+                if isinstance(name, str) and item.get('in') == 'query':
+                    parameters[name] = item
+        pairs = []
+        for name, item in parameters.items():
+            if SECRET.search(name) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', name):
+                continue
+            schema = item.get('schema', item)
+            if not isinstance(schema, dict) or '$ref' in schema or '$ref' in item:
+                continue
+            kind = schema.get('type', 'string')
+            if kind not in ('string', 'integer', 'number', 'boolean'):
+                continue
+            value = {'integer': '1', 'number': '1', 'boolean': 'true', 'string': 'wsr'}[kind]
+            pairs.append((name, value))
+        if pairs:
+            separator = '&' if '?' in path else '?'
+            routes.append(path.lstrip('/') + separator + urllib.parse.urlencode(pairs))
+    return routes
+
+
 def route_literals(text):
     """Conservative quoted URL inventory; never evaluate JavaScript."""
     literals = list(dict.fromkeys(m.group(2) for m in re.finditer(
@@ -92,6 +136,13 @@ class Links(HTMLParser):
                     self.form['fields'].append([attrs['name'], attrs.get('value', '')])
             elif kind in ('file', 'password'):
                 self.form['excluded_inputs'] = True
+        if (tag == 'button' and self.form is not None and attrs.get('name')
+                and attrs.get('type', 'submit').lower() == 'submit'
+                and 'disabled' not in attrs and not self.form.get('submit')):
+            if attrs.get('formaction') or attrs.get('formmethod'):
+                self.form['excluded_inputs'] = True
+            else:
+                self.form['submit'] = [attrs['name'], attrs.get('value', '')]
         if tag in ('select', 'textarea') and self.form is not None:
             self.form['controls'].append({'name': attrs.get('name', ''), 'type': tag, 'disabled': 'disabled' in attrs})
             self.form['excluded_inputs'] = True
@@ -318,18 +369,14 @@ def crawl(seeds, target, folder, stop, max_pages=100, depth=3, rate=5, timeout=1
                     try:
                         spec = json.loads(body)
                         if isinstance(spec, dict) and ('openapi' in spec or 'swagger' in spec):
-                            paths = spec.get('paths', {})
                             base_path = spec.get('basePath', '/') if 'swagger' in spec else '/'
                             if 'openapi' in spec:
                                 servers = spec.get('servers', [])
                                 if servers and isinstance(servers[0], dict):
                                     base_path = servers[0].get('url', '/')
                             api_base = urllib.parse.urljoin(url, str(base_path).rstrip('/') + '/')
-                            if isinstance(paths, dict):
-                                for path, operations in list(paths.items())[:2000]:
-                                    # Inventory only GET operations without unresolved path templates.
-                                    if isinstance(operations, dict) and 'get' in operations and '{' not in path:
-                                        add(path.lstrip('/'), api_base, level + 1, url, 'openapi-get')
+                            for path in openapi_get_routes(spec):
+                                add(path, api_base, level + 1, url, 'openapi-get')
                     except (ValueError, TypeError):
                         pass
                 # No forms are submitted during discovery.

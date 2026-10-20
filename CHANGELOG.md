@@ -207,3 +207,13 @@ verification under Kali/Linux/WSL before claiming deployment readiness.
   controls and defer upstream insecure HTTPS Katana unless explicitly requested.
 - Document a focused 12-project upstream comparison, deferred integrations and commands.
 - Add process/format/scope tests and a controlled end-to-end discovery-to-XSS pipeline test.
+# Unreleased
+
+- Add `--scan deep` and menu 11 with larger bounded discovery/input-check budgets;
+  preserve explicit limits, external scanner opt-in and TLS verification.
+- Feed declared OpenAPI/Swagger primitive GET query inputs into candidate checks
+  instead of inventorying only bare paths. Keep references, secret parameters,
+  templated paths and non-GET operations deferred.
+- Preserve named HTML submit buttons in GET form candidates, including handler
+  dispatch values; defer buttons with form action/method overrides.
+- Add loopback API-discovery-to-reflection-check integration and regression tests.

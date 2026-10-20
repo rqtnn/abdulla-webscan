@@ -977,7 +977,7 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 def parser():
     p = argparse.ArgumentParser(description="The World Is Yours: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
-    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports', 'ctf'), default='full', help='Choose a named scan plan.')
+    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports', 'ctf', 'deep'), default='full', help='Choose a named scan plan; deep expands bounded web discovery and GET checks.')
     p.add_argument('--only', nargs='+', choices=scan_modes.TOOLS, help='Run only selected tools; checks/SQLmap use crawl for GET discovery. External tools require --retain-raw-evidence.')
     menu = p.add_mutually_exclusive_group()
     menu.add_argument('--menu', action='store_true', help='Show scan choices after the target.')
