@@ -32,6 +32,7 @@ python3 twiy.py
 11. Deep web assessment: up to 300 crawl requests, depth 5, 600 seconds of crawling,
     30 GET parameter candidates and 300 seconds of built-in input checks. Explicit
     CLI limits override these defaults; rate limits and origin scope still apply.
+12. All applicable tools with the deep plan (retains raw scanner evidence).
 
 ```bash
 # Deep assessment of an authorized lab, with installed external scanners
@@ -52,6 +53,29 @@ prove the endpoint was fully tested. Named HTML submit buttons are preserved in
 GET form candidates so handlers gated by `submit=...` can be reached.
 
 Ports are editable, not fixed examples. Enter `8080`, `22,8080,8443` or `8000-8100`. Arabic digits and Arabic commas are accepted. If selected ports exclude the target URL port, the scanner uses the same host on the selected ports and drops the old URL path/query. It never adds the excluded port back. Cookie/account contexts require a matching origin instead.
+
+To run every installed applicable adapter instead of the default built-in-only
+workflow, choose menu **12** or use:
+
+```bash
+python3 twiy.py --check
+python3 twiy.py http://LAB_IP:PORT --scan deep --all-tools --no-menu
+```
+
+`--all-tools` enables external scanners, raw evidence and all four directory
+engines (ffuf, Gobuster, Feroxbuster, Dirsearch). Explicit `--skip`, `--enum`,
+`--no-auto-sqli` and `--no-active-checks` still apply. It does not install binaries
+or templates. WPScan needs WordPress evidence; SQLmap/Dalfox need eligible GET
+inputs; testssl needs HTTPS. Hostname pinning and unsupported CLI/TLS restrictions
+remain visible, with the exact reason in **Tool coverage**. Retained raw evidence
+can contain response data and should be protected.
+
+The terminal preflight lists missing/incompatible binaries. The final terminal,
+HTML report and `summary.json` now include every adapter, job counts, parsed
+observations and parsing gaps. `completed_no_matches` only describes executed
+checks; missing, disabled, inapplicable and inconclusive checks are distinct.
+Dalfox reflection/informational tiers remain observations and do not increase
+the vulnerability candidate count.
 
 ## Common commands
 

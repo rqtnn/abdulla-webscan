@@ -40,7 +40,8 @@ class TerminalUI:
                        '4 Discover web services (Nmap only)', '5 WhatWeb only', '6 Crawl only',
                        '7 Choose individual tools', '8 All TCP ports (1-65535)',
                        '9 Web on custom port(s)', '10 CTF web checks (includes arithmetic SSTI)',
-                       '11 Deep web assessment (larger discovery/check budgets)'):
+                       '11 Deep web assessment (larger discovery/check budgets)',
+                       '12 Deep assessment with ALL applicable tools (retains raw evidence)'):
             self.message(option)
         self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
         def ask(text):
@@ -67,7 +68,9 @@ class TerminalUI:
             return {'scan': 'ctf', 'only': None}
         if choice == '11':
             return {'scan': 'deep', 'only': None}
-        raise ValueError('Choose a scan number from 1 to 11')
+        if choice == '12':
+            return {'scan': 'deep', 'only': None, 'all_tools': True}
+        raise ValueError('Choose a scan number from 1 to 12')
 
     def whatweb_results(self, summary):
         """Show bounded parsed fingerprints and explicit reasons for absent output."""

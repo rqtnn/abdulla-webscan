@@ -49,6 +49,7 @@ import technology
 import scan_diagnostics
 import web_engine
 import whatweb_snapshot
+import tool_coverage
 from transport import connection
 
 from brand import VERSION
@@ -819,9 +820,13 @@ def write_reports(root, summary):
             summary['comparison'] = dict(status='incomplete', error=type(exc).__name__)
         (root / 'comparison.json').write_text(evidence.dumps(summary['comparison']), encoding='utf-8')
     summary['diagnostics'] = scan_diagnostics.explain(summary)
+    summary['tool_coverage'] = tool_coverage.build(summary, ALL_TOOLS)
     (root / "summary.json").write_text(evidence.dumps(summary), encoding="utf-8")
     summary = evidence.safe(summary)
     esc = lambda value: html.escape(str(value), quote=True)
+    tool_rows = ''.join('<tr>' + ''.join('<td>' + esc(row.get(key, '')) + '</td>'
+        for key in ('tool', 'status', 'jobs', 'observations', 'parse_issues', 'reason')) + '</tr>'
+        for row in summary['tool_coverage'])
     diagnostic_rows = ''.join('<li><strong>' + esc(row['code']) + '</strong> ' +
         esc(row['url']) + ': ' + esc(row['message']) + ' ' + esc(row['action']) + '</li>'
         for row in summary['diagnostics'])
@@ -934,6 +939,8 @@ not a validated penetration testing report. Each active web job uses its own rat
 external web jobs are serialized to avoid adding those rates. HTTP errors and redirects are recorded as responses.
 Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are omitted unless explicitly retained. Redirect destinations are displayed for review.</div>
 <h2>Coverage diagnostics</h2><ul>{diagnostic_rows}</ul>
+<h2>Tool coverage</h2><p>Every adapter is listed. Observations are parsed evidence, not confirmed vulnerabilities. A completed process with parsing errors leaves unknown coverage.</p>
+<div class="scroll"><table><tr><th>Tool</th><th>Status</th><th>Jobs</th><th>Parsed observations</th><th>Parse issues</th><th>Reason / next step</th></tr>{tool_rows}</table></div>
 <h2>Technology follow-up plan</h2><p>Passive WordPress inventory; vulnerability metadata needs a configured WPScan API token or database. Unknown technologies and empty results leave coverage gaps.</p><table><tr><th>URL</th><th>Observed technologies</th><th>WPScan</th><th>Reason</th></tr>{technology_rows}</table>
 <h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
 Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
@@ -952,7 +959,7 @@ Distinct checks, queries, schemes, ports and HTTP statuses remain separate.</p>
 {''.join(f'<option value="{s}">{s.title()}</option>' for s in ranks)}</select>
 <label for="finding-category">Type</label><select id="finding-category"><option value="all">All observations</option>
 <option value="scanner_match">Vulnerability candidates</option><option value="configuration">Configuration</option>
-<option value="technology">Technologies</option><option value="endpoint">Endpoints</option></select>
+<option value="technology">Technologies</option><option value="endpoint">Endpoints</option><option value="observation">Other observations</option></select>
 <button id="finding-reset" type="button">Reset filters</button><p id="finding-count" aria-live="polite"></p>
 <div class="scroll"><table><tr><th>Observation</th><th>URL</th><th>Scanner severity</th><th>Validation</th><th>Evidence</th><th>Recommended review/remediation</th></tr>
 {''.join(finding_rows)}</table></div><h2>Parsing and manual review gaps</h2><ul>{issues}</ul>
@@ -1013,6 +1020,7 @@ def parser():
     p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
     p.add_argument('--retain-raw-evidence', action='store_true', help='Retain sensitive response bodies and external scanner files; protect the run directory.')
     p.add_argument('--external-tools', action='store_true', help='Enable external web scanners for numeric IP targets; per-tool rates, independent of built-in gate. Requires --retain-raw-evidence.')
+    p.add_argument('--all-tools', action='store_true', help='Enable all applicable external adapters and all directory engines; retains raw scanner evidence. Explicit --skip and --enum still apply.')
     p.add_argument("--rate", type=positive, default=5, help="Approximate web requests/sec per tool, not global.")
     p.add_argument("--tool-timeout", type=positive, default=600, help="Seconds per external web job.")
     p.add_argument("--nmap-timeout", type=positive, default=900, help="Seconds for Nmap.")
@@ -1220,6 +1228,15 @@ def _main(argv=None):
     summary['external_scanners'] = {'enabled': args.external_tools,
         'policy': 'Numeric IP targets for remote adapters; WhatWeb hostname snapshots are pinned; explicit raw-evidence opt-in; serialized jobs.'}
     summary['scan_plan'] = scan_modes.plan(args)
+    summary['tool_selection'] = dict(skipped=list(args.skip), enum=args.enum,
+        no_auto_sqli=args.no_auto_sqli, no_active_checks=args.no_active_checks,
+        no_crawl=args.no_crawl, session=bool(args.session))
+    summary['tool_inventory'] = (tool_paths(args.dry_run, args.only)
+        if args.assessment != 'network' else {})
+    if args.external_tools:
+        for tool, binary in summary['tool_inventory'].items():
+            if tool not in args.skip:
+                say('[TOOLS] ' + tool + ': ' + ('available' if binary else 'MISSING / incompatible executable; install and rerun --check'))
     if args.compare:
         try:
             previous = run_history.load(args.compare)
@@ -1341,7 +1358,7 @@ def _main(argv=None):
             if not args.external_tools:
                 say('[WEB] Built-in discovery/checks enabled; external web scanners are opt-in (--external-tools --retain-raw-evidence) for numeric IP targets.')
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
-        binaries = tool_paths(args.dry_run, args.only) if not runner.stop.is_set() and args.assessment != 'network' else {}
+        binaries = summary['tool_inventory'] if not runner.stop.is_set() and args.assessment != 'network' else {}
         jobs = build_jobs(args, root, live, binaries)
         summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
         try:
@@ -1409,6 +1426,8 @@ def _main(argv=None):
             if args.only != ['whatweb']:
                 UI.web_priorities(summary)
                 UI.coverage_diagnostics(summary)
+                for row in summary.get('tool_coverage', []):
+                    say('[TOOL RESULT] ' + row['tool'] + ': ' + row['status'] + ' | ' + row['reason'])
                 UI.severity_table(summary['coverage']['severity_counts'])
                 UI.completion(summary['statistics'], summary['risk_assessment']['overall_priority'])
             say(f"\nReport: {root / 'report.html'}")

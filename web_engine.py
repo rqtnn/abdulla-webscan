@@ -120,7 +120,7 @@ def observations(tool, row, base):
             raise ValueError('Dalfox finding has no HTTP PoC URL')
         title = {'V': 'Dalfox XSS candidate', 'A': 'Dalfox DOM source-to-sink candidate',
                  'R': 'Reflection only; XSS not established', 'I': 'Dalfox informational observation'}[kind]
-        yield ('scanner_match', 'dalfox-' + kind + ':' + str(row.get('param', '')),
+        yield ('scanner_match' if kind in ('V', 'A') else 'observation', 'dalfox-' + kind + ':' + str(row.get('param', '')),
                url, title, str(row.get('severity', 'unknown')).lower() if kind in ('V', 'A') else 'info')
     else:
         if not row.get('id') or not row.get('severity'):
