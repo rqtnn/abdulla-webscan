@@ -9,8 +9,9 @@ def build():
     root = Path(__file__).resolve().parent
     files = sorted(root.glob('*.py')) + [root / name for name in
         ('README.md', 'CHANGELOG.md', 'requirements.txt', '.gitignore')]
-    for directory in ('docs', 'assets', 'wordlists', 'examples'):
-        files += sorted(path for path in (root / directory).rglob('*') if path.is_file())
+    for directory in ('docs', 'assets', 'wordlists', 'examples', 'webscan', 'benchmarks'):
+        files += sorted(path for path in (root / directory).rglob('*') if path.is_file()
+                        and '__pycache__' not in path.parts and path.suffix != '.pyc')
     files += sorted((root / 'scripts').glob('*.sh')) + sorted((root / 'tests').glob('*.cjs'))
     files += sorted((root / 'tests').glob('*.py')) + [root / 'tests' / 'README.md']
     files += [root / '.github' / 'workflows' / 'python-tests.yml']

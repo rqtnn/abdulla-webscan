@@ -1,4 +1,6 @@
-"""Shared WS-R version and HTTP identity."""
-NAME = 'The World Is Yours'
-VERSION = '4.3.0'
-USER_AGENT = 'TWIY/' + VERSION
+"""Compatibility import; implementation lives in webscan.brand."""
+import importlib
+import sys
+
+_implementation = importlib.import_module("webscan.brand")
+sys.modules[__name__] = _implementation

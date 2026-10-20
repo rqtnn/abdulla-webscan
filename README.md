@@ -1,21 +1,111 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.3.0**.
+Linux web vulnerability assessment for CTF labs, authorized servers and domain inventories. Version **5.0.0 — Scarface edition**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
+
+## 5.0: package structure, ASCII identity and reporting efficiency
+
+The original globe/pedestal and Miami-palm ASCII art uses a red/ivory terminal identity
+inspired by Scarface. Narrow terminals receive compact art. `--theme plain` keeps a
+single startup line; `--no-banner` suppresses it. Plain output requires no color/ANSI support;
+Rich output prints the drawing literally, without interpreting markup.
+
+The engine now lives in `webscan/`. Process lifecycle, batch scheduling and report rendering
+have separate modules, while the existing root imports are thin compatibility aliases.
+`python3 twiy.py`, `python3 ws_r.py` and `python3 -m webscan` use the same implementation.
+Assets are resolved relative to the distribution, not the shell's current directory.
+
+Discovery now saves atomic `checkpoint.json` progress instead of reparsing every scanner log
+and rebuilding HTML after every HTTP probe. The final report still aggregates all available
+evidence. A checkpoint is explicitly incomplete live state; its findings/statistics may be stale.
+The HTML report uses the same dark red/ivory palette, with its stylesheet in `assets/report.css`.
+
+Run the reproducible, offline reporting comparison:
+
+```bash
+python3 benchmarks/report_checkpoints.py --probes 40 --repeats 3
+```
+
+One local Windows/Python 3.12 run measured median reporting time of 0.2564 seconds before
+and 0.0303 seconds after (8.45x) for 40 synthetic HTTP observations, with identical final
+assessment statistics. That measures report generation/checkpoint I/O only, not network
+scan throughput or performance against another product. Timings vary by machine and storage.
+See [architecture and compatibility](docs/ARCHITECTURE.md).
+
+## Server and subdomain assessment (4.4)
+
+Menu **13** inventories all 65,535 TCP ports, identifies open services, reviews network/TLS
+configuration and assesses discovered HTTP/HTTPS services, including unusual ports. Menu
+**14** discovers the entered domain and its subdomains, resolves A/AAAA addresses and runs
+the server plan for each hostname/address. Existing single-host modes retain their scope.
+
+```bash
+# Your existing Metasploitable lab: TCP inventory + network and web assessment
+python3 twiy.py 192.168.56.102 --scan server --mode parallel --workers 2 --no-menu
+
+# Passive subdomain discovery + DNS inventory only (no port/HTTP scans)
+python3 twiy.py example.test --scan estate --discover-only --no-menu
+
+# Domain/subdomains, all TCP ports and discovered web services
+python3 twiy.py example.test --scan estate --host-workers 2 --mode parallel --no-menu
+
+# Known internal names, without querying passive public providers
+python3 twiy.py example.test --scan estate --no-passive --subdomain-file names.txt --no-menu
+```
+
+Replace `example.test` with your authorized domain. Install [Subfinder](https://docs.projectdiscovery.io/opensource/subfinder/install)
+for automatic passive discovery; provider API keys improve coverage. A `names.txt` file uses
+one full hostname per line; duplicates, invalid names, wildcards and names outside the exact
+domain suffix are excluded. The apex is always included. No DNS brute force is performed.
+Missing Subfinder, provider failure, DNS failure, timeouts and names omitted by `--max-hosts`
+remain visible. A completed inventory means the chosen sources/tasks completed, not that
+every subdomain was discovered. Wildcard DNS is checked with two random names and matches
+are marked as possible wildcards, not confirmed sites. These controls make two DNS queries
+even in `--discover-only`; `--dry-run` makes none.
+
+Estate runs produce a top-level `report.html` and `estate.json`, plus a separate evidence/report
+directory per hostname/address. All resolved addresses are scanned. Host and TLS SNI retain
+the original name with connections pinned to that IP. Complete Nmap XML is hash-verified and
+reused for another hostname on the same IP; partial scans are not reused. Each hostname still
+gets its own HTTP assessment. Same-IP child scans are serialized; different IPs may run
+concurrently. Inventories are cached only inside this run, not reused from earlier runs.
+
+Defaults: 25 names including the apex (`--max-hosts`, max 500), two child processes
+(`--host-workers`, max 4), 120 seconds passive discovery (`--discovery-timeout`) and
+7,200 seconds per child (`--host-timeout`). Nmap gets 3,600 seconds per server, unless
+`--nmap-timeout` overrides it. A child timeout kills its process group and retains existing
+evidence; the index records the interruption. Rates are per child/tool, not a global estate
+limit: increasing host and tool workers multiplies traffic and memory use.
+
+`--mode parallel` now actually controls the main independent external-tool batch, fixing the
+previous hardcoded sequential execution. Tool dependencies and automatic SQLmap checks remain
+ordered. To trade fingerprint depth for speed, explicitly use `--version-intensity 2`; this
+can identify fewer versions. There is no measured performance claim against Sn1per.
+
+External tools still require `--external-tools --retain-raw-evidence` (or `--all-tools`).
+For hostname children, adapters that cannot pin DNS remain explicitly deferred; built-in
+checks and WhatWeb snapshots preserve hostname scope. Estate does not pass account cookies
+or specialized IDOR/SSRF settings between sites; run those against the chosen child separately.
+Server inventory covers TCP, not UDP. DNS inventories cannot enumerate every virtual host,
+and an IP does not reveal every website. Shared/CDN IPs can belong to a provider: include
+them only when your assessment scope covers that infrastructure. Inspect `--discover-only`
+before starting server scans if needed.
 
 ## Repository layout
 
 | Location | Contents |
 | --- | --- |
 | `twiy.py`, `ws_r.py` | Current and compatible launchers |
-| Root Python modules | Scanner, discovery and report implementation |
+| `webscan/` | Scanner engine, CLI orchestration, process runner, scheduler and report renderer |
+| Root Python modules | Thin compatibility aliases for existing imports |
 | `docs/` | Tool integration notes and Sn1per comparison |
 | `assets/` | Embedded HTML report JavaScript |
 | `wordlists/` | Default discovery wordlist |
 | `examples/` | Account-context configuration example |
 | `scripts/` | Linux setup and diagnostics |
 | `tests/` | Python and JavaScript tests |
+| `benchmarks/` | Reproducible offline reporting comparison |
 | `.github/workflows/` | Linux CI |
 | `releases/`, `results/` | Generated archives and scan output (ignored by Git) |
 

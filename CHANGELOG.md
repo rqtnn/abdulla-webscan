@@ -1,3 +1,32 @@
+## 5.0.0 — Scarface identity and engine separation
+
+- Add original globe/pedestal and palm ASCII art, red/ivory styling, a compact narrow-terminal
+  drawing and `--theme plain`; preserve `--no-banner` and literal/plain output.
+- Move the assessment implementation into `webscan/` with relative internal imports,
+  explicit distribution resource paths and a `python -m webscan` entry point.
+- Preserve root module imports and both existing launchers through compatibility aliases.
+- Separate process lifecycle, independent batch scheduling and report rendering from CLI orchestration.
+- Replace per-discovery-response full report generation with atomic live checkpoints; final
+  reports continue aggregating all available evidence. Correct the report's parallel-rate explanation.
+- Extract report CSS, align its palette, include package files and benchmarks in source releases,
+  and test launchers after extracting a release into another working directory.
+- Add a reproducible offline benchmark and compatibility, checkpoint, atomic-write and theme tests.
+  Performance measurements apply only to reporting, not network scans or other products.
+
+## 4.4.0 — Server and domain inventory
+
+- Add `--scan server` / menu 13 for all TCP ports, network/TLS review and discovered web services.
+- Add `--scan estate` / menu 14, passive Subfinder and file-based subdomain discovery,
+  exact domain suffix filtering, A/AAAA resolution, wildcard hints, host caps and discovery-only mode.
+- Isolate hostname/address scans, preserve HTTP Host/TLS SNI, reuse verified completed same-IP
+  Nmap inventories, and aggregate coverage and links in an HTML/JSON index.
+- Bound DNS/process execution, preserve partial reports on interruption, and expose missing
+  discovery sources, deferred names and failed child scans.
+- Fix the main external batch ignoring `--mode parallel`; dependencies remain ordered.
+- Add controlled discovery, pinning, same-IP reuse, timeout and CLI regression tests.
+- No Sn1per speed/coverage benchmark or real Linux external-scanner validation was performed
+  during local Windows development; Linux CI and a Kali lab run remain necessary.
+
 ## 4.2.1 — Protocol discovery and empty-result coverage
 
 - Skip redundant generated HTTP/HTTPS alternatives once a port is identified; keep explicit URL
