@@ -1,8 +1,37 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs, authorized servers and domain inventories. Version **4.4.0**.
+Linux web vulnerability assessment for CTF labs, authorized servers and domain inventories. Version **5.0.0 — Scarface edition**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
+
+## 5.0: package structure, ASCII identity and reporting efficiency
+
+The original globe/pedestal and Miami-palm ASCII art uses a red/ivory terminal identity
+inspired by Scarface. Narrow terminals receive compact art. `--theme plain` keeps a
+single startup line; `--no-banner` suppresses it. Plain output requires no color/ANSI support;
+Rich output prints the drawing literally, without interpreting markup.
+
+The engine now lives in `webscan/`. Process lifecycle, batch scheduling and report rendering
+have separate modules, while the existing root imports are thin compatibility aliases.
+`python3 twiy.py`, `python3 ws_r.py` and `python3 -m webscan` use the same implementation.
+Assets are resolved relative to the distribution, not the shell's current directory.
+
+Discovery now saves atomic `checkpoint.json` progress instead of reparsing every scanner log
+and rebuilding HTML after every HTTP probe. The final report still aggregates all available
+evidence. A checkpoint is explicitly incomplete live state; its findings/statistics may be stale.
+The HTML report uses the same dark red/ivory palette, with its stylesheet in `assets/report.css`.
+
+Run the reproducible, offline reporting comparison:
+
+```bash
+python3 benchmarks/report_checkpoints.py --probes 40 --repeats 3
+```
+
+One local Windows/Python 3.12 run measured median reporting time of 0.2564 seconds before
+and 0.0303 seconds after (8.45x) for 40 synthetic HTTP observations, with identical final
+assessment statistics. That measures report generation/checkpoint I/O only, not network
+scan throughput or performance against another product. Timings vary by machine and storage.
+See [architecture and compatibility](docs/ARCHITECTURE.md).
 
 ## Server and subdomain assessment (4.4)
 
@@ -68,13 +97,15 @@ before starting server scans if needed.
 | Location | Contents |
 | --- | --- |
 | `twiy.py`, `ws_r.py` | Current and compatible launchers |
-| Root Python modules | Scanner, discovery and report implementation |
+| `webscan/` | Scanner engine, CLI orchestration, process runner, scheduler and report renderer |
+| Root Python modules | Thin compatibility aliases for existing imports |
 | `docs/` | Tool integration notes and Sn1per comparison |
 | `assets/` | Embedded HTML report JavaScript |
 | `wordlists/` | Default discovery wordlist |
 | `examples/` | Account-context configuration example |
 | `scripts/` | Linux setup and diagnostics |
 | `tests/` | Python and JavaScript tests |
+| `benchmarks/` | Reproducible offline reporting comparison |
 | `.github/workflows/` | Linux CI |
 | `releases/`, `results/` | Generated archives and scan output (ignored by Git) |
 
