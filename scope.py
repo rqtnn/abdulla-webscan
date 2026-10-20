@@ -170,5 +170,6 @@ def prepare_target(args):
     if args.url_only:
         u = urllib.parse.urlsplit(target.url)
         args.ports = str(u.port or (443 if u.scheme == 'https' else 80))
-    args.scan_ip = target.host if args.dry_run else resolve_one(target.host)
+    args.scan_ip = (str(args.connect_ip) if getattr(args, 'connect_ip', None) else
+                    target.host if args.dry_run else resolve_one(target.host))
     return target

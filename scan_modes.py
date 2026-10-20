@@ -12,6 +12,8 @@ def default(args, argv, name, value):
 
 
 def apply(args, argv):
+    if args.scan in ('server', 'estate'):
+        default(args, argv, 'nmap_timeout', 3600)
     if getattr(args, 'all_tools', False):
         if args.only:
             raise ValueError('Use --all-tools or --only, not both')
@@ -44,11 +46,11 @@ def apply(args, argv):
         for name, value in dict(crawl_pages=300, crawl_depth=5, crawl_timeout=600,
                 checks_timeout=300, max_sqli_jobs=30, advanced_timeout=300).items():
             default(args, argv, name, value)
-    if args.scan == 'all-ports':
+    if args.scan in ('all-ports', 'server'):
         if args.ports or args.top_ports or args.url_port_only or 'nmap' in args.skip:
             raise ValueError('All-port discovery requires Nmap without a restricted port selection')
         args.all_ports = True
-        args.assessment = 'web'
+        args.assessment = 'full' if args.scan == 'server' else 'web'
         default(args, argv, 'nmap_timeout', 3600)
     elif args.scan == 'web':
         args.assessment = 'web'

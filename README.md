@@ -1,8 +1,67 @@
 # The World Is Yours
 
-Linux web vulnerability assessment for CTF labs and authorized single-host targets. Version **4.3.0**.
+Linux web vulnerability assessment for CTF labs, authorized servers and domain inventories. Version **4.4.0**.
 
 Enter one IP, hostname or URL, select a web scan, and follow the evidence in the HTML report. The default workflow focuses on web applications; Nmap discovers services that may host HTTP/HTTPS. It does not automatically gain a shell or claim server access.
+
+## Server and subdomain assessment (4.4)
+
+Menu **13** inventories all 65,535 TCP ports, identifies open services, reviews network/TLS
+configuration and assesses discovered HTTP/HTTPS services, including unusual ports. Menu
+**14** discovers the entered domain and its subdomains, resolves A/AAAA addresses and runs
+the server plan for each hostname/address. Existing single-host modes retain their scope.
+
+```bash
+# Your existing Metasploitable lab: TCP inventory + network and web assessment
+python3 twiy.py 192.168.56.102 --scan server --mode parallel --workers 2 --no-menu
+
+# Passive subdomain discovery + DNS inventory only (no port/HTTP scans)
+python3 twiy.py example.test --scan estate --discover-only --no-menu
+
+# Domain/subdomains, all TCP ports and discovered web services
+python3 twiy.py example.test --scan estate --host-workers 2 --mode parallel --no-menu
+
+# Known internal names, without querying passive public providers
+python3 twiy.py example.test --scan estate --no-passive --subdomain-file names.txt --no-menu
+```
+
+Replace `example.test` with your authorized domain. Install [Subfinder](https://docs.projectdiscovery.io/opensource/subfinder/install)
+for automatic passive discovery; provider API keys improve coverage. A `names.txt` file uses
+one full hostname per line; duplicates, invalid names, wildcards and names outside the exact
+domain suffix are excluded. The apex is always included. No DNS brute force is performed.
+Missing Subfinder, provider failure, DNS failure, timeouts and names omitted by `--max-hosts`
+remain visible. A completed inventory means the chosen sources/tasks completed, not that
+every subdomain was discovered. Wildcard DNS is checked with two random names and matches
+are marked as possible wildcards, not confirmed sites. These controls make two DNS queries
+even in `--discover-only`; `--dry-run` makes none.
+
+Estate runs produce a top-level `report.html` and `estate.json`, plus a separate evidence/report
+directory per hostname/address. All resolved addresses are scanned. Host and TLS SNI retain
+the original name with connections pinned to that IP. Complete Nmap XML is hash-verified and
+reused for another hostname on the same IP; partial scans are not reused. Each hostname still
+gets its own HTTP assessment. Same-IP child scans are serialized; different IPs may run
+concurrently. Inventories are cached only inside this run, not reused from earlier runs.
+
+Defaults: 25 names including the apex (`--max-hosts`, max 500), two child processes
+(`--host-workers`, max 4), 120 seconds passive discovery (`--discovery-timeout`) and
+7,200 seconds per child (`--host-timeout`). Nmap gets 3,600 seconds per server, unless
+`--nmap-timeout` overrides it. A child timeout kills its process group and retains existing
+evidence; the index records the interruption. Rates are per child/tool, not a global estate
+limit: increasing host and tool workers multiplies traffic and memory use.
+
+`--mode parallel` now actually controls the main independent external-tool batch, fixing the
+previous hardcoded sequential execution. Tool dependencies and automatic SQLmap checks remain
+ordered. To trade fingerprint depth for speed, explicitly use `--version-intensity 2`; this
+can identify fewer versions. There is no measured performance claim against Sn1per.
+
+External tools still require `--external-tools --retain-raw-evidence` (or `--all-tools`).
+For hostname children, adapters that cannot pin DNS remain explicitly deferred; built-in
+checks and WhatWeb snapshots preserve hostname scope. Estate does not pass account cookies
+or specialized IDOR/SSRF settings between sites; run those against the chosen child separately.
+Server inventory covers TCP, not UDP. DNS inventories cannot enumerate every virtual host,
+and an IP does not reveal every website. Shared/CDN IPs can belong to a provider: include
+them only when your assessment scope covers that infrastructure. Inspect `--discover-only`
+before starting server scans if needed.
 
 ## Repository layout
 

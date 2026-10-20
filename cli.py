@@ -984,7 +984,16 @@ checks; unlinked routes, JavaScript-only pages and authenticated endpoints may r
 def parser():
     p = argparse.ArgumentParser(description="The World Is Yours: one-host web assessment pipeline for authorized labs.")
     p.add_argument("target", nargs="?", type=target_input, help="One IPv4/IPv6, hostname, or HTTP(S) URL; prompted if omitted.")
-    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports', 'ctf', 'deep'), default='full', help='Choose a named scan plan; deep expands bounded web discovery and GET checks.')
+    p.add_argument('--scan', choices=('full', 'web', 'quick', 'port', 'all-ports', 'ctf', 'deep', 'server', 'estate'), default='full', help='server inventories all TCP ports plus network/web checks; estate discovers a domain and its subdomains.')
+    p.add_argument('--subdomain-file', type=Path, help='Additional newline-separated subdomain names for estate discovery.')
+    p.add_argument('--no-passive', action='store_true', help='Do not query passive Subfinder sources during estate discovery.')
+    p.add_argument('--discover-only', action='store_true', help='Estate DNS inventory only, without port scans or HTTP requests.')
+    p.add_argument('--max-hosts', type=positive, default=25, help='Estate host cap including apex, maximum 500; omitted names are recorded.')
+    p.add_argument('--host-workers', type=positive, default=2, help='Concurrent estate child scans, maximum 4.')
+    p.add_argument('--discovery-timeout', type=positive, default=120, help='Subfinder process timeout in seconds.')
+    p.add_argument('--host-timeout', type=positive, default=7200, help='Whole child scan timeout in seconds; partial reports retained.')
+    p.add_argument('--connect-ip', type=ipaddress.ip_address, help='Pin this single-host scan to an explicitly selected IP (Host/SNI retain the target name).')
+    p.add_argument('--reuse-services', type=Path, help='Reuse a completed same-IP summary service inventory instead of repeating Nmap.')
     p.add_argument('--only', nargs='+', choices=scan_modes.TOOLS, help='Run only selected tools; checks/SQLmap use crawl for GET discovery. External tools require --retain-raw-evidence.')
     menu = p.add_mutually_exclusive_group()
     menu.add_argument('--menu', action='store_true', help='Show scan choices after the target.')
@@ -1080,7 +1089,7 @@ def _main(argv=None):
     apply_profile(args, argv)
     if args.assessment == 'network' and args.sqlmap_url:
         p.error('--sqlmap-url requires --assessment web or full.')
-    if args.assessment == 'web' and args.service_checks:
+    if args.assessment == 'web' and args.service_checks and args.scan not in ('server', 'estate'):
         p.error('--service-checks requires --assessment network or full.')
     if args.report_only:
         root = args.report_only.expanduser().resolve()
@@ -1147,10 +1156,28 @@ def _main(argv=None):
         p.error("Use workers/http-workers <= 8, file-limit <= 1000 and rate <= 50.")
     if args.crawl_pages > 1000 or args.crawl_depth > 10 or args.max_sqli_jobs > 50:
         p.error('Use crawl-pages <= 1000, crawl-depth <= 10 and max-sqli-jobs <= 50.')
+    if args.scan == 'estate':
+        import estate
+        try:
+            return estate.run(args)
+        except (ValueError, OSError) as exc:
+            p.error(str(exc))
+    if args.subdomain_file or args.no_passive or args.discover_only:
+        p.error('Subdomain discovery options require --scan estate.')
     if bool(args.sqlmap_url) != bool(args.sqlmap_param):
         p.error("Use --sqlmap-url and --sqlmap-param together.")
     try:
         prepare_target(args)
+        if args.connect_ip:
+            try:
+                numeric_target = ipaddress.ip_address(args.target)
+            except ValueError:
+                numeric_target = None
+            if numeric_target is not None and numeric_target != args.connect_ip:
+                raise ValueError('--connect-ip must match a numeric target')
+            args.scan_ip = str(args.connect_ip)
+        if args.reuse_services and 'nmap' in args.skip:
+            raise ValueError('--reuse-services conflicts with --skip nmap')
         if args.input_url and args.ports and origin(args.input_url)[2] not in listed_ports(args.ports):
             if args.cookie_file or args.contexts:
                 raise ValueError('Selected ports exclude the authenticated URL. Use a matching URL to preserve credential origin scope.')
@@ -1226,7 +1253,7 @@ def _main(argv=None):
     summary['built_in_http'] = {'workers': args.http_workers, 'delay': args.delay, 'rate': args.rate,
                                'time_checks_workers': 1 if args.time_sqli else None}
     summary['external_scanners'] = {'enabled': args.external_tools,
-        'policy': 'Numeric IP targets for remote adapters; WhatWeb hostname snapshots are pinned; explicit raw-evidence opt-in; serialized jobs.'}
+        'policy': 'Numeric IP targets for remote adapters; WhatWeb hostname snapshots are pinned; explicit raw-evidence opt-in; mode=' + args.mode}
     summary['scan_plan'] = scan_modes.plan(args)
     summary['tool_selection'] = dict(skipped=list(args.skip), enum=args.enum,
         no_auto_sqli=args.no_auto_sqli, no_active_checks=args.no_active_checks,
@@ -1260,7 +1287,19 @@ def _main(argv=None):
     if args.dry_run:
         say('[PLAN ONLY] No network requests will run. Open ports and versions will be empty.')
     try:
-        if "nmap" not in args.skip:
+        if args.reuse_services:
+            import estate
+            summary['ports'], summary['nmap'] = estate.reuse_services(args.reuse_services, args.scan_ip, nmap_scan.selection(args))
+            summary['nmap']['selection'] = nmap_scan.selection(args)
+            # Copy the source evidence into this run so the report remains portable.
+            folder = root / 'nmap'
+            folder.mkdir(exist_ok=True)
+            shutil.copyfile(args.reuse_services.parent / 'nmap' / 'services.xml', folder / 'services.xml')
+            summary['jobs'].append(dict(name='Reused same-IP service inventory', tool='nmap', argv=[],
+                command='Verified local Nmap XML reuse', folder=str(folder), outputs=['services.xml'],
+                status='completed', elapsed=0, note=summary['nmap']['note']))
+            UI.services_table(summary['ports'], summary['nmap']['note'])
+        elif "nmap" not in args.skip:
             folder = root / "nmap"
             cmd = nmap_scan.command(args, folder)
             say(f'[NMAP SCOPE] {nmap_scan.selection(args)}; version intensity {args.version_intensity}; target {args.scan_ip}')
@@ -1360,7 +1399,7 @@ def _main(argv=None):
         (root / "urls.txt").write_text("\n".join(evidence.url(u) for u in live) + ("\n" if live else ""), encoding="utf-8")
         binaries = summary['tool_inventory'] if not runner.stop.is_set() and args.assessment != 'network' else {}
         jobs = build_jobs(args, root, live, binaries)
-        summary["jobs"].extend(run_batch(runner, jobs, "sequential", args.workers))
+        summary["jobs"].extend(run_batch(runner, jobs, args.mode, args.workers))
         try:
             run_web_engines(args, root, live, summary, runner, binaries)
         except Exception as exc:
