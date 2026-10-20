@@ -8,7 +8,9 @@ from brand import VERSION
 def build():
     root = Path(__file__).resolve().parent
     files = sorted(root.glob('*.py')) + [root / name for name in
-        ('report.js', 'README.md', 'CHANGELOG.md', 'WEB_TOOLS.md', 'SN1PER_COMPARISON.md', 'requirements.txt', 'wordlist.txt', '.gitignore', 'contexts.example.json')]
+        ('README.md', 'CHANGELOG.md', 'requirements.txt', '.gitignore')]
+    for directory in ('docs', 'assets', 'wordlists', 'examples'):
+        files += sorted(path for path in (root / directory).rglob('*') if path.is_file())
     files += sorted((root / 'scripts').glob('*.sh')) + sorted((root / 'tests').glob('*.cjs'))
     files += sorted((root / 'tests').glob('*.py')) + [root / 'tests' / 'README.md']
     files += [root / '.github' / 'workflows' / 'python-tests.yml']

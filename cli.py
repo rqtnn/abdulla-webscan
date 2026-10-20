@@ -58,7 +58,7 @@ ENUM_TOOLS = ("ffuf", "gobuster", "feroxbuster", "dirsearch")
 ALL_TOOLS = ("nmap", "httpx", "whatweb", *ENUM_TOOLS, "nikto", "nuclei", "sqlmap", "wpscan", *web_engine.TOOLS)
 COMMON_WEB_PORTS = {80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000}
 PRINT_LOCK = threading.Lock()
-REPORT_SCRIPT = (Path(__file__).resolve().parent / 'report.js').read_text(encoding='utf-8')
+REPORT_SCRIPT = (Path(__file__).resolve().parent / 'assets' / 'report.js').read_text(encoding='utf-8')
 
 
 def say(message):
@@ -1016,7 +1016,7 @@ def parser():
                    help='Nmap service probe intensity 0..9; default 7, light=2, exhaustive=9. Higher takes longer.')
     p.add_argument('--nmap-rate', type=positive, default=100, help='Nmap maximum packet rate, <=1000; independent of web --rate.')
     p.add_argument("--url", action="append", default=[], help="Additional same-host HTTP(S) base URL, useful for unusual ports.")
-    p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlist.txt")
+    p.add_argument("--wordlist", type=Path, default=Path(__file__).resolve().parent / "wordlists" / "default.txt")
     p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
     p.add_argument('--retain-raw-evidence', action='store_true', help='Retain sensitive response bodies and external scanner files; protect the run directory.')
     p.add_argument('--external-tools', action='store_true', help='Enable external web scanners for numeric IP targets; per-tool rates, independent of built-in gate. Requires --retain-raw-evidence.')
