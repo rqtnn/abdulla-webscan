@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
-const script = fs.readFileSync(path.join(__dirname, '../report.js'), 'utf8');
+const script = fs.readFileSync(path.join(__dirname, '../assets/report.js'), 'utf8');
 function fixture() {
   const elements = {};
   for (const name of ['search', 'severity', 'category', 'reset', 'count']) {

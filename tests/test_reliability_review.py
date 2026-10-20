@@ -193,8 +193,11 @@ class ReliabilityReview(unittest.TestCase):
     def test_release_contains_readme_comparison_document_and_manifest(self):
         path = build_release.build()
         with zipfile.ZipFile(path) as archive:
-            self.assertIn('ws-r/SN1PER_COMPARISON.md', archive.namelist())
-            self.assertIn('SN1PER_COMPARISON.md', archive.read('ws-r/MANIFEST.sha256').decode())
+            self.assertIn('ws-r/docs/SN1PER_COMPARISON.md', archive.namelist())
+            self.assertIn('docs/SN1PER_COMPARISON.md', archive.read('ws-r/MANIFEST.sha256').decode())
+            self.assertIn('ws-r/assets/report.js', archive.namelist())
+            self.assertIn('ws-r/wordlists/default.txt', archive.namelist())
+            self.assertIn('ws-r/examples/contexts.example.json', archive.namelist())
 
     @unittest.skipUnless(os.name == 'posix' and shutil.which('nmap'), 'Requires installed Nmap (Linux CI installs it)')
     def test_real_nmap_binary_records_a_loopback_open_port(self):
