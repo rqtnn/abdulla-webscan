@@ -1,0 +1,11 @@
+body{background:#0b0b0d;color:#f4ead5;font:15px system-ui;margin:0;padding:32px}
+main{max-width:1400px;margin:auto}h1{color:#e34949}h2{margin-top:32px}a{color:#e34949}
+table{width:100%;border-collapse:collapse;background:#18181c}td,th{text-align:left;padding:12px;
+border-bottom:1px solid #3b292d;vertical-align:top;overflow-wrap:anywhere}th{color:#c1b7a7}
+.scroll{overflow:auto}.note{background:#211a1d;padding:16px;border-radius:8px;line-height:1.6}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin:24px 0}
+.card{background:#211a1d;border:1px solid #3b292d;border-radius:12px;padding:20px}
+.card strong{font-size:32px;display:block}.card span{color:#c1b7a7}
+input,select{background:#18181c;color:#f4ead5;border:1px solid #c1b7a7;padding:10px;border-radius:6px;margin:8px}
+[hidden]{display:none}nav a{display:inline-block;margin:8px 16px 8px 0}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
