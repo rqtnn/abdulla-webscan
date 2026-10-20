@@ -12,6 +12,13 @@ def default(args, argv, name, value):
 
 
 def apply(args, argv):
+    if getattr(args, 'all_tools', False):
+        if args.only:
+            raise ValueError('Use --all-tools or --only, not both')
+        if args.assessment == 'network':
+            raise ValueError('--all-tools requires a web assessment')
+        args.external_tools = args.retain_raw_evidence = True
+        default(args, argv, 'enum', 'all')
     args.only = list(dict.fromkeys(args.only)) if args.only else None
     chosen = set(args.only or [])
     needs_crawl = bool(chosen & {'crawl', 'checks', 'dalfox'} or 'sqlmap' in chosen and not args.sqlmap_url)
@@ -83,6 +90,7 @@ def apply(args, argv):
 def plan(args):
     requested = list(args.only or [])
     return dict(mode=args.scan, requested_tools=requested or ['profile:' + args.profile],
+                all_tools=getattr(args, 'all_tools', False),
                 dependencies=['crawl_for_GET_parameters'] if not args.no_crawl and set(requested) & {'checks', 'sqlmap', 'dalfox'} else [],
                 external_raw_output=args.external_tools and args.retain_raw_evidence)
 
