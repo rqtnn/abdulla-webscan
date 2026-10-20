@@ -39,7 +39,8 @@ class TerminalUI:
         for option in ('1 Web vulnerability assessment', '2 Web on ports 80/443', '3 Quick web assessment',
                        '4 Discover web services (Nmap only)', '5 WhatWeb only', '6 Crawl only',
                        '7 Choose individual tools', '8 All TCP ports (1-65535)',
-                       '9 Web on custom port(s)', '10 CTF web checks (includes arithmetic SSTI)'):
+                       '9 Web on custom port(s)', '10 CTF web checks (includes arithmetic SSTI)',
+                       '11 Deep web assessment (larger discovery/check budgets)'):
             self.message(option)
         self.message('External tool selection retains raw scanner output. Built-in checks omit bodies by default.')
         def ask(text):
@@ -64,7 +65,9 @@ class TerminalUI:
             return {'scan': 'port', 'only': None, 'ports': parse_ports(ask('Enter your web port(s), 1-65535 (single, comma list or range): '))}
         if choice == '10':
             return {'scan': 'ctf', 'only': None}
-        raise ValueError('Choose a scan number from 1 to 10')
+        if choice == '11':
+            return {'scan': 'deep', 'only': None}
+        raise ValueError('Choose a scan number from 1 to 11')
 
     def whatweb_results(self, summary):
         """Show bounded parsed fingerprints and explicit reasons for absent output."""

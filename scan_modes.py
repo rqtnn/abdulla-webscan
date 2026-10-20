@@ -27,12 +27,16 @@ def apply(args, argv):
         raise ValueError('The same tool cannot be selected with --only and --skip')
     if chosen and args.scan != 'full':
         raise ValueError('Use --only or --scan; do not combine separate scan plans')
-    if args.scan == 'ctf':
+    if args.scan in ('ctf', 'deep'):
         args.assessment = 'web'
         args.template_checks = not args.no_active_checks
         args.active_checks = not args.no_active_checks
         args.builtin_sqli = not args.no_active_checks
         args.sensitive_files = args.api_discovery = True
+    if args.scan == 'deep':
+        for name, value in dict(crawl_pages=300, crawl_depth=5, crawl_timeout=600,
+                checks_timeout=300, max_sqli_jobs=30, advanced_timeout=300).items():
+            default(args, argv, name, value)
     if args.scan == 'all-ports':
         if args.ports or args.top_ports or args.url_port_only or 'nmap' in args.skip:
             raise ValueError('All-port discovery requires Nmap without a restricted port selection')
