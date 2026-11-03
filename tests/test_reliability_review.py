@@ -190,11 +190,13 @@ class ReliabilityReview(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(scanner.call_count, 1)
 
-    def test_release_contains_readme_comparison_document_and_manifest(self):
+    def test_release_contains_documentation_and_manifest(self):
         path = build_release.build()
         with zipfile.ZipFile(path) as archive:
-            self.assertIn('ws-r/docs/SN1PER_COMPARISON.md', archive.namelist())
-            self.assertIn('docs/SN1PER_COMPARISON.md', archive.read('ws-r/MANIFEST.sha256').decode())
+            for name in ('README.md', 'docs/USAGE.md', 'docs/CHANGELOG.md', 'docs/WEB_TOOLS.md'):
+                self.assertIn('ws-r/' + name, archive.namelist())
+                self.assertIn(name, archive.read('ws-r/MANIFEST.sha256').decode())
+            self.assertNotIn('ws-r/docs/SN1PER_COMPARISON.md', archive.namelist())
             self.assertIn('ws-r/assets/report.js', archive.namelist())
             self.assertIn('ws-r/wordlists/default.txt', archive.namelist())
             self.assertIn('ws-r/examples/contexts.example.json', archive.namelist())
