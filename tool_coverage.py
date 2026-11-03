@@ -31,7 +31,8 @@ def build(summary, tools):
                 if issues:
                     reason += '; output parsing failed: inspect task evidence and console logs.'
         elif tool in selection.get('skipped', []):
-            status, reason = 'disabled', 'Excluded by tool selection or external scanner policy.'
+            status, reason = 'disabled', ('External scanners disabled by default; use --all-tools or --external-tools --retain-raw-evidence.'
+                if tool != 'nmap' and summary.get('external_scanners', {}).get('enabled') is False else 'Excluded by tool selection (--skip or --only).')
         elif tool != 'nmap' and summary.get('external_scanners', {}).get('enabled') is False:
             status, reason = 'disabled', 'Enable --all-tools (retains raw evidence) or --external-tools --retain-raw-evidence.'
         elif tool in inventory and not inventory[tool]:
