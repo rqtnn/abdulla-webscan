@@ -195,3 +195,13 @@ External binaries must be installed separately. Katana on HTTPS requires explici
 `--insecure` because upstream does not verify certificates. Unsupported CLI
 versions are skipped with a reason. These integrations expand coverage; no
 benchmark establishing superiority over Sn1per has been performed.
+
+## Authorized hostname scans
+
+External tools can resolve the selected hostname themselves when explicitly requested:
+
+```bash
+python3 twiy.py https://AUTHORIZED_HOST --scan deep --all-tools --allow-hostname-scanners --no-menu
+```
+
+This opts out of DNS pinning for external tools only; built-in requests and WhatWeb snapshots remain pinned. Review the hostname's resolved addresses as part of the authorized scope. Raw scanner evidence is retained by `--all-tools`. Missing tools, unsupported versions and missing GET inputs remain distinct coverage gaps. TLS validation stays enabled unless `--insecure` is explicitly selected for a self-signed lab. A `www` hostname and its bare domain remain separate targets: review redirects and restart with the intended authorized hostname rather than automatically expanding scope.

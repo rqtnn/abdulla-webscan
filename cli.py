@@ -943,7 +943,7 @@ Built-in discovery, crawler and checks share one start-rate gate. Raw bodies are
 <div class="scroll"><table><tr><th>Tool</th><th>Status</th><th>Jobs</th><th>Parsed observations</th><th>Parse issues</th><th>Reason / next step</th></tr>{tool_rows}</table></div>
 <h2>Technology follow-up plan</h2><p>Passive WordPress inventory; vulnerability metadata needs a configured WPScan API token or database. Unknown technologies and empty results leave coverage gaps.</p><table><tr><th>URL</th><th>Observed technologies</th><th>WPScan</th><th>Reason</th></tr>{technology_rows}</table>
 <h2>Assessment coverage</h2><p>Single-host web vulnerability assessment. Session scope: {esc(summary.get('session_scope', 'unauthenticated'))}. Nmap target: {esc(summary.get('scan_ip', summary['target']))}.
-Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners for hostnames are deferred. Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
+Built-in HTTP connects to the pinned Nmap address and retains the hostname for Host, TLS SNI and certificate verification. WhatWeb fingerprints pinned response snapshots for hostnames; other external scanners require explicit hostname-resolution opt-in (--allow-hostname-scanners). Severity counts group repeated header checks per origin; instance counts retain affected responses. All counts describe unvalidated scanner/configuration matches;
 endpoint and technology observations are excluded from these counts. Coverage limits and gaps do not mean the target is secure.</p>
 <div class="scroll"><table>{coverage_rows}</table></div>
 <h2>Grouped assessment findings</h2><p>Repeated header notes are grouped; individual URLs and raw evidence remain below.</p>
@@ -1020,6 +1020,7 @@ def parser():
     p.add_argument("--templates", type=Path, help='Local Nuclei YAML root; auto-detect legacy, XDG or Kali directories.')
     p.add_argument('--retain-raw-evidence', action='store_true', help='Retain sensitive response bodies and external scanner files; protect the run directory.')
     p.add_argument('--external-tools', action='store_true', help='Enable external web scanners for numeric IP targets; per-tool rates, independent of built-in gate. Requires --retain-raw-evidence.')
+    p.add_argument('--allow-hostname-scanners', action='store_true', help='Allow external tools to resolve the authorized hostname themselves; DNS is not pinned for these tools. Requires external tools and raw evidence.')
     p.add_argument('--all-tools', action='store_true', help='Enable all applicable external adapters and all directory engines; retains raw scanner evidence. Explicit --skip and --enum still apply.')
     p.add_argument("--rate", type=positive, default=5, help="Approximate web requests/sec per tool, not global.")
     p.add_argument("--tool-timeout", type=positive, default=600, help="Seconds per external web job.")
@@ -1065,6 +1066,17 @@ def parser():
     p.add_argument("--output", type=Path, default=Path("results"), help="Run parent directory, or report.json/report.html with a separate evidence directory.")
     p.add_argument("--version", action="version", version=VERSION)
     return p
+
+
+def external_scanner_reason(args):
+    if not args.external_tools and not args.dry_run:
+        return 'External scanners disabled by default; use --external-tools with --retain-raw-evidence.'
+    try:
+        ipaddress.ip_address(args.target)
+    except ValueError:
+        if not args.allow_hostname_scanners:
+            return 'External scanner deferred: hostname DNS pinning is unavailable; explicitly use --allow-hostname-scanners with --external-tools --retain-raw-evidence for an authorized hostname.'
+    return ''
 
 
 def _main(argv=None):
@@ -1196,6 +1208,8 @@ def _main(argv=None):
         p.error(str(exc))
     if args.only and args.external_tools and args.session:
         p.error('Selected external tools do not inherit account credentials; use built-in tools for cookie-scoped scans.')
+    if args.allow_hostname_scanners and not args.external_tools:
+        p.error('--allow-hostname-scanners requires --external-tools or --all-tools.')
     if args.external_tools and not args.retain_raw_evidence and not args.dry_run:
         p.error('--external-tools requires --retain-raw-evidence because scanners write raw responses.')
     if not args.external_tools and not args.dry_run:
@@ -1209,12 +1223,9 @@ def _main(argv=None):
         re.sub(r'[^A-Za-z0-9_.-]', '_', args.target) + "_" + dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d_%H%M%S") + "_" + uuid.uuid4().hex[:6])
     root.mkdir(parents=True, mode=0o700)
     runner = Runner(args.dry_run)
-    try:
-        ipaddress.ip_address(args.target)
-    except ValueError:
-        runner.web_skip_reason = 'External scanner deferred: cannot guarantee DNS pinning for this hostname; built-in checks remain available.'
-    if not args.external_tools and not args.dry_run:
-        runner.web_skip_reason = 'External scanners disabled by default; use --external-tools with --retain-raw-evidence for numeric IP targets.'
+    runner.web_skip_reason = external_scanner_reason(args)
+    if args.allow_hostname_scanners and not runner.web_skip_reason:
+        say('[EXTERNAL DNS] External tools resolve the authorized hostname themselves; their DNS is not pinned. Built-in requests remain pinned.')
     args.request_gate = RequestGate(args.rate, args.delay)
     runner.request_gate = args.request_gate
     summary = {"version": VERSION, "target": args.target, "input_target": args.input_target,
@@ -1226,7 +1237,8 @@ def _main(argv=None):
     summary['built_in_http'] = {'workers': args.http_workers, 'delay': args.delay, 'rate': args.rate,
                                'time_checks_workers': 1 if args.time_sqli else None}
     summary['external_scanners'] = {'enabled': args.external_tools,
-        'policy': 'Numeric IP targets for remote adapters; WhatWeb hostname snapshots are pinned; explicit raw-evidence opt-in; serialized jobs.'}
+        'allow_hostname_scanners': args.allow_hostname_scanners,
+        'policy': 'Remote hostname resolution requires --allow-hostname-scanners; WhatWeb snapshots and built-in requests remain pinned; raw-evidence opt-in required.'}
     summary['scan_plan'] = scan_modes.plan(args)
     summary['tool_selection'] = dict(skipped=list(args.skip), enum=args.enum,
         no_auto_sqli=args.no_auto_sqli, no_active_checks=args.no_active_checks,

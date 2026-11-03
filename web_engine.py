@@ -76,7 +76,7 @@ def command(tool, binary, url, folder, args, parameter=None):
     else:
         if u.scheme != 'https':
             reason = 'testssl protocol checks require an HTTPS origin.'
-        ip = u.hostname
+        ip = getattr(args, 'scan_ip', None) or u.hostname
         ip = '[' + ip + ']' if ':' in ip else ip
         argv = [binary, '--protocols', '--nodns', 'none', '--ip', ip,
                 '--warnings', 'batch', '--color', '0',

@@ -130,10 +130,16 @@ class TerminalUI:
             self.message('[NEXT] Open report.html for controls, reproduction, remediation and CVE references.')
 
     def coverage_diagnostics(self, summary):
+        groups = {}
         for row in summary.get('diagnostics', []):
-            self.message('[COVERAGE] ' + row['code'] + ': ' + row['message'] +
-                         (' URL: ' + row['url'] if row['url'] else ''))
-            self.message('[NEXT] ' + row['action'])
+            groups.setdefault((row['code'], row['message'], row['action']), []).append(row)
+        for (code, message, action), rows in groups.items():
+            first = rows[0]
+            suffix = (' URL: ' + first['url']) if first['url'] else ''
+            if len(rows) > 1:
+                suffix += f' ({len(rows)} affected URLs; full list in report.html)'
+            self.message('[COVERAGE] ' + code + ': ' + message + suffix)
+            self.message('[NEXT] ' + action)
 
     def completion(self, statistics, priority):
         self.message('[SUMMARY] Hosts assessed={hosts_assessed} | Hosts reached={hosts_reached} | '
