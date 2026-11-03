@@ -18,6 +18,24 @@ class CoverageTests(unittest.TestCase):
         scan_modes.apply(args, argv)
         return args
 
+    def test_hostname_adapters_require_explicit_resolution_opt_in(self):
+        args = self.args('--all-tools')
+        args.target = 'authorized.invalid'
+        self.assertIn('--allow-hostname-scanners', cli.external_scanner_reason(args))
+        args.allow_hostname_scanners = True
+        self.assertEqual(cli.external_scanner_reason(args), '')
+        args.external_tools = False
+        self.assertIn('disabled by default', cli.external_scanner_reason(args))
+
+    def test_repeated_coverage_messages_are_grouped(self):
+        ui = TerminalUI('plain')
+        rows = [dict(code='redirect_scope', message='Outside scope', action='Review host', url=url)
+                for url in ('http://host/a', 'http://host/b')]
+        with patch.object(ui, 'message') as output:
+            ui.coverage_diagnostics({'diagnostics': rows})
+        self.assertEqual(output.call_count, 2)
+        self.assertIn('2 affected URLs', output.call_args_list[0].args[0])
+
     def test_all_tools_enables_all_directory_engines_and_external_policy(self):
         args = self.args('--scan', 'deep', '--all-tools')
         self.assertTrue(args.external_tools and args.retain_raw_evidence)
