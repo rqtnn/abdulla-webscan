@@ -17,6 +17,16 @@ python3 twiy.py
 
 Linux only. `ws_r.py` remains a compatible launcher. Alternatively, run `bash scripts/setup-linux.sh` to create the Python environment and check dependencies. It does not install external scanners.
 
+## Web console: paste a URL and scan
+
+```bash
+python3 webapp.py
+```
+
+Open **http://127.0.0.1:8765**, paste the authorized website URL and select **Start web scan**. The console runs deep built-in web checks and all installed applicable external tools, shows live progress and opens the evidence report. Missing tools and partial coverage remain visible. It scans the URL's hostname/port, not every server port. External tools resolve the hostname themselves and retain raw evidence locally. The console listens only on loopback; do not expose it through a public proxy.
+
+Scan results stay under `results/web-console/`; the dashboard session is held in memory and can reconnect after a page reload. Restarting the server clears the dashboard session, but keeps saved reports. One assessment runs at a time, with a 30-minute limit. Use `--port 8766` if the default port is busy. Authentication, POST flows and business logic still need application-specific testing. No scanner can guarantee discovery of every vulnerability.
+
 ## Documentation
 
 - [Scan modes, commands and troubleshooting](docs/USAGE.md)
